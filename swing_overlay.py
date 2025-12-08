@@ -74,10 +74,24 @@ def draw_hud(frame,row,event):
 # ------------------------------------------------------------------
 # Event Detection
 # ------------------------------------------------------------------
-def detect_swing_start(df,thr=5.0,win=20):
-    diff = df["shoulder_angle"].diff().abs()
-    for i in range(len(df)-win):
-        if diff.iloc[i:i+win].mean()>thr: return i
+def detect_swing_start(df, win=10, thr=-0.003, min_count=5):
+    """
+    ダウンスイング開始検知（wrist_y の下降開始）
+
+    Parameters:
+        win:      判定ウィンドウ長
+        thr:      下降の閾値（diff が thr 以下を下降とみなす）
+        min_count: win 内で閾値以下のフレーム数（多数決）
+
+    """
+    dy = df["wrist_y"].diff().fillna(0)
+
+    for i in range(len(dy) - win):
+        seg = dy.iloc[i:i+win]
+        # 下降が一定割合を超える（例：半分以上）
+        if (seg < thr).sum() >= min_count:
+            return i
+
     return None
 
 
