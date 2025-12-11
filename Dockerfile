@@ -40,4 +40,4 @@ VOLUME ["/data"]
 
 # Default command: expects /data/swing.mp4 to exist on the host mount
 # Run both swing analyzer and metrics overlay tool
-CMD ["bash", "-c", "python swing_overlay.py --video /data/swing.mp4 --out /data"]
+CMD ["bash", "-c", "python swing_overlay.py --my_swing /data/input/swing.mp4 --pro_swing /data/input/pro.mp4 --out /data/output"]

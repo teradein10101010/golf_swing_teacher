@@ -77,12 +77,10 @@ def draw_hud(frame,row,event):
 def detect_swing_start(df, win=10, thr=-0.003, min_count=5):
     """
     ダウンスイング開始検知（wrist_y の下降開始）
-
     Parameters:
         win:      判定ウィンドウ長
         thr:      下降の閾値（diff が thr 以下を下降とみなす）
         min_count: win 内で閾値以下のフレーム数（多数決）
-
     """
     dy = df["wrist_y"].diff().fillna(0)
 
@@ -149,11 +147,7 @@ def extract_metrics(pose,cap):
         idx+=1
     return pd.DataFrame(data,columns=["frame","shoulder_angle","hip_angle","elbow_angle","wrist_x","wrist_y","club_x","club_y"])
 
-
-def main(video,out_dir):
-    mp_pose=mp.solutions.pose
-    pose=mp_pose.Pose(static_image_mode=False,model_complexity=1,min_tracking_confidence=0.5,min_detection_confidence=0.5)
-
+def render_hud(pose, video,out_dir,tag):
     cap=cv2.VideoCapture(video)
     df=extract_metrics(pose,cap)
     cap.release()
@@ -162,11 +156,11 @@ def main(video,out_dir):
     s,t,im,e,df=detect_events(df)
 
     os.makedirs(out_dir,exist_ok=True)
-    df.to_csv(f"{out_dir}/swing_metrics.csv",index=False)
+    df.to_csv(f"{out_dir}/swing_metrics_{tag}.csv",index=False)
 
     cap=cv2.VideoCapture(video)
     h,w=int(cap.get(4)),int(cap.get(3))
-    out=cv2.VideoWriter(f"{out_dir}/swing_overlay.mp4",cv2.VideoWriter_fourcc(*"mp4v"),30,(w,h))
+    out=cv2.VideoWriter(f"{out_dir}/swing_overlay_{tag}.mp4",cv2.VideoWriter_fourcc(*"mp4v"),30,(w,h))
 
     idx=0
     while True:
@@ -191,11 +185,72 @@ def main(video,out_dir):
 
     out.release();cap.release()
 
+    return s, t, im, e
+
+def render_side_by_side(my_video, pro_video, my_start, pro_start, out_path):
+    cap1 = cv2.VideoCapture(my_video)
+    cap2 = cv2.VideoCapture(pro_video)
+
+    # seek to each start frame
+    cap1.set(cv2.CAP_PROP_POS_FRAMES, my_start)
+    cap2.set(cv2.CAP_PROP_POS_FRAMES, pro_start)
+
+    w1, h1 = int(cap1.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap1.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    w2, h2 = int(cap2.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap2.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # height を揃える（横に並べるため）
+    height = max(h1, h2)
+    width = w1 + w2
+
+    out = cv2.VideoWriter(out_path,
+                          cv2.VideoWriter_fourcc(*"mp4v"),
+                          30,
+                          (width, height))
+
+    while True:
+        r1, f1 = cap1.read()
+        r2, f2 = cap2.read()
+
+        if not r1 or not r2:
+            break
+
+        # サイズ調整（高さ揃え）
+        if f1.shape[0] != height:
+            f1 = cv2.resize(f1, (w1, height))
+        if f2.shape[0] != height:
+            f2 = cv2.resize(f2, (w2, height))
+
+        combined = np.hstack([f1, f2])
+        out.write(combined)
+
+    cap1.release()
+    cap2.release()
+    out.release()
+
+def main(my_swing, ref_swing, out_dir):
+    mp_pose = mp.solutions.pose
+    pose = mp_pose.Pose(static_image_mode=False,
+                        model_complexity=1,
+                        min_tracking_confidence=0.5,
+                        min_detection_confidence=0.5)
+
+    s_my, t_my, im_my, e_my = render_hud(pose, my_swing, out_dir, "my_swing")
+    s_pro, t_pro, im_pro, e_pro = render_hud(pose, ref_swing, out_dir, "pro_swing")
+
+    # --- side-by-side output ---
+    render_side_by_side(
+        f"{out_dir}/swing_overlay_my_swing.mp4",
+        f"{out_dir}/swing_overlay_pro_swing.mp4",
+        s_my, s_pro,
+        f"{out_dir}/swing_compare_side_by_side.mp4"
+    )
+
 
 if __name__=="__main__":
     import argparse
     p=argparse.ArgumentParser()
-    p.add_argument("--video",required=True)
+    p.add_argument("--my_swing",required=True)
+    p.add_argument("--pro_swing",required=True)
     p.add_argument("--out",required=True)
     a=p.parse_args()
-    main(a.video,a.out)
+    main(a.my_swing, a.pro_swing, a.out)
