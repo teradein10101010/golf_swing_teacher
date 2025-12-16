@@ -1,10 +1,17 @@
-# Refactored pose swing analysis (modular, cleaner structure)
+# app.py
+import streamlit as st
+import tempfile
+import os
 import cv2
 import mediapipe as mp
 import pandas as pd
 import numpy as np
-import os
+from pathlib import Path
+from typing import Tuple, Optional
 
+# ---------------------------
+# 設定
+# ---------------------------
 VISIBLE_POINTS = [11,12,13,14,15,16,23,24,25,26,27,28]
 POSE_CONNECTIONS = [
     (11,13),(13,15),(12,14),(14,16),
@@ -13,25 +20,23 @@ POSE_CONNECTIONS = [
     (11,12),(23,24)
 ]
 
-# ------------------------------------------------------------------
-# Utility functions
-# ------------------------------------------------------------------
+# ---------------------------
+# ユーティリティ
+# ---------------------------
 def calc_angle(a,b,c):
     a,b,c = np.array(a),np.array(b),np.array(c)
     ba, bc = a-b, c-b
     cos = np.dot(ba,bc)/(np.linalg.norm(ba)*np.linalg.norm(bc)+1e-9)
     return np.degrees(np.arccos(np.clip(cos,-1,1)))
 
-
 def compute_velocity(df,x,y,vx,vy):
     df[vx] = df[x].diff().fillna(0)
     df[vy] = df[y].diff().fillna(0)
     return df
 
-
-# ------------------------------------------------------------------
-# Drawing functions
-# ------------------------------------------------------------------
+# ---------------------------
+# 描画
+# ---------------------------
 def draw_pose(frame,lm,color=(0,255,0),thickness=6):
     h,w = frame.shape[:2]
     for idx in VISIBLE_POINTS:
@@ -45,7 +50,6 @@ def draw_pose(frame,lm,color=(0,255,0),thickness=6):
         x1,y1 = int(p1.x*w),int(p1.y*h)
         x2,y2 = int(p2.x*w),int(p2.y*h)
         cv2.line(frame,(x1,y1),(x2,y2),color,thickness)
-
 
 def draw_hud(frame,row,event):
     h,w = frame.shape[:2]
@@ -70,46 +74,36 @@ def draw_hud(frame,row,event):
         cv2.putText(frame,t,(x1+10,y),cv2.FONT_HERSHEY_SIMPLEX,0.7,(255,255,255),2)
         y+=28
 
-
-# ------------------------------------------------------------------
-# Event Detection
-# ------------------------------------------------------------------
+# ---------------------------
+# イベント検出ロジック
+# ---------------------------
 def detect_swing_start(df, win=10, thr=-0.003, min_count=5):
-    """
-    ダウンスイング開始検知（wrist_y の下降開始）
-    Parameters:
-        win:      判定ウィンドウ長
-        thr:      下降の閾値（diff が thr 以下を下降とみなす）
-        min_count: win 内で閾値以下のフレーム数（多数決）
-    """
     dy = df["wrist_y"].diff().fillna(0)
-
     for i in range(len(dy) - win):
         seg = dy.iloc[i:i+win]
-        # 下降が一定割合を超える（例：半分以上）
         if (seg < thr).sum() >= min_count:
             return i
-
     return None
 
-
 def detect_swing_top(df,start,win=3):
+    if start is None: return None
     diff = df["wrist_y"].diff().iloc[start:]
     for i in range(len(diff)-win):
         if diff.iloc[i:i+win].mean()>0.005: return i+start
     return None
 
-
 def detect_swing_end(df,top,win=10):
+    if top is None: return None
     diff = df["shoulder_angle"].diff().abs().iloc[top:]
     for i in range(len(diff)-win):
         if diff.iloc[i:i+win].mean()<1: return i+top
     return i+top
 
-
 def detect_swing_impact(df,top,end):
-    return df["wrist_y"].iloc[top:end].idxmax()
-
+    if top is None or end is None: return None
+    slice_idx = df["wrist_y"].iloc[top:end]
+    if len(slice_idx)==0: return None
+    return slice_idx.idxmax()
 
 def detect_events(df):
     for (x,y,vx,vy) in [("wrist_x","wrist_y","wrist_vx","wrist_vy"),("club_x","club_y","club_vx","club_vy")]:
@@ -121,100 +115,122 @@ def detect_events(df):
     e = detect_swing_end(df,t)
     im = detect_swing_impact(df,t,e)
 
-    if not (s<t<im<e): return s,t,im,e,df
+    # 安全チェック
+    try:
+        if s is None or t is None or im is None or e is None:
+            return s,t,im,e,df
+        if not (s < t < im < e):
+            return s,t,im,e,df
+    except Exception:
+        return s,t,im,e,df
     return s,t,im,e,df
 
-
-# ------------------------------------------------------------------
-# Main processing
-# ------------------------------------------------------------------
-def extract_metrics(pose,cap):
-    data,idx=[],0
-    while True:
-        r,f=cap.read(),None
-        ret,frame=r
-        if not ret: break
-        rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-        res=pose.process(rgb)
-        if not res.pose_landmarks: idx+=1; continue
-        lm=res.pose_landmarks.landmark
-        sh=calc_angle((lm[11].x,lm[11].y),(lm[23].x,lm[23].y),(lm[12].x,lm[12].y))
-        hip=calc_angle((lm[23].x,lm[23].y),(lm[25].x,lm[25].y),(lm[27].x,lm[27].y))
-        el=calc_angle((lm[13].x,lm[13].y),(lm[11].x,lm[11].y),(lm[23].x,lm[23].y))
-        wx,wy=lm[16].x,lm[16].y
-        cx,cy=(lm[15].x+lm[16].x)/2,(lm[15].y+lm[16].y)/2
-        data.append([idx,sh,hip,el,wx,wy,cx,cy])
-        idx+=1
-    return pd.DataFrame(data,columns=["frame","shoulder_angle","hip_angle","elbow_angle","wrist_x","wrist_y","club_x","club_y"])
-
-def render_hud(pose, video,out_dir,tag):
-    cap=cv2.VideoCapture(video)
-    df=extract_metrics(pose,cap)
+# ---------------------------
+# フレームから数値抽出
+# ---------------------------
+def extract_metrics_from_video(video_path: str, mp_pose) -> pd.DataFrame:
+    cap = cv2.VideoCapture(video_path)
+    data = []
+    idx = 0
+    with mp_pose.Pose(static_image_mode=False,
+                      model_complexity=1,
+                      min_tracking_confidence=0.5,
+                      min_detection_confidence=0.5) as pose:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            res = pose.process(rgb)
+            if not res.pose_landmarks:
+                idx += 1
+                continue
+            lm = res.pose_landmarks.landmark
+            sh = calc_angle((lm[11].x,lm[11].y),(lm[23].x,lm[23].y),(lm[12].x,lm[12].y))
+            hip = calc_angle((lm[23].x,lm[23].y),(lm[25].x,lm[25].y),(lm[27].x,lm[27].y))
+            el = calc_angle((lm[13].x,lm[13].y),(lm[11].x,lm[11].y),(lm[23].x,lm[23].y))
+            wx,wy = lm[16].x,lm[16].y
+            cx,cy = (lm[15].x+lm[16].x)/2,(lm[15].y+lm[16].y)/2
+            data.append([idx,sh,hip,el,wx,wy,cx,cy])
+            idx += 1
     cap.release()
+    df = pd.DataFrame(data,columns=["frame","shoulder_angle","hip_angle","elbow_angle","wrist_x","wrist_y","club_x","club_y"])
+    return df
 
-    df["club_plane_score"] = 1-np.abs(df["shoulder_angle"]-90)/90
-    s,t,im,e,df=detect_events(df)
+# ---------------------------
+# HUD付き動画書き出し
+# ---------------------------
+def render_hud_video(input_video:str, df:pd.DataFrame, out_path:str, mp_pose) -> Tuple[Optional[int],Optional[int],Optional[int],Optional[int]]:
+    # events を再計算して取得
+    df["club_plane_score"] = 1 - np.abs(df["shoulder_angle"] - 90) / 90
+    s,t,im,e,df = detect_events(df)
 
-    os.makedirs(out_dir,exist_ok=True)
-    df.to_csv(f"{out_dir}/swing_metrics_{tag}.csv",index=False)
+    cap = cv2.VideoCapture(input_video)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    out = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w,h))
 
-    cap=cv2.VideoCapture(video)
-    h,w=int(cap.get(4)),int(cap.get(3))
-    out=cv2.VideoWriter(f"{out_dir}/swing_overlay_{tag}.mp4",cv2.VideoWriter_fourcc(*"mp4v"),30,(w,h))
+    idx = 0
+    with mp_pose.Pose(static_image_mode=False,
+                      model_complexity=1,
+                      min_tracking_confidence=0.5,
+                      min_detection_confidence=0.5) as pose:
+        while True:
+            ret, frame = cap.read()
+            if not ret or idx>=len(df):
+                break
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            res = pose.process(rgb)
 
-    idx=0
-    while True:
-        ret,frame=cap.read()
-        if not ret or idx>=len(df): break
-        rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-        res=pose.process(rgb)
+            flag = None
+            color = (0,255,0)
+            if idx == s:
+                flag="start"; color=(255,255,0)
+            elif idx == t:
+                flag="top"; color=(255,0,0)
+            elif idx == im:
+                flag="impact"; color=(0,0,255)
+            elif idx == e:
+                flag="finish"; color=(0,255,255)
 
-        flag=None
-        if idx==s: flag="start"; color=(255,255,0)
-        elif idx==t: flag="top"; color=(255,0,0)
-        elif idx==im: flag="impact"; color=(0,0,255)
-        elif idx==e: flag="finish"; color=(0,255,255)
-        else: color=(0,255,0)
+            if res.pose_landmarks:
+                draw_pose(frame, res.pose_landmarks.landmark, color=color, thickness=7)
 
-        if res.pose_landmarks:
-            draw_pose(frame,res.pose_landmarks.landmark,color=color,thickness=7)
+            draw_hud(frame, df.iloc[idx], flag)
+            out.write(frame)
+            idx += 1
 
-        draw_hud(frame,df.iloc[idx],flag)
-        out.write(frame)
-        idx+=1
+    out.release()
+    cap.release()
+    # CSV 保存は呼び出し側で行う
+    return s,t,im,e,df
 
-    out.release();cap.release()
-
-    return s, t, im, e
-
+# ---------------------------
+# サイドバイサイド生成
+# ---------------------------
 def render_side_by_side(my_video, pro_video, my_start, pro_start, out_path):
     cap1 = cv2.VideoCapture(my_video)
     cap2 = cv2.VideoCapture(pro_video)
 
-    # seek to each start frame
-    cap1.set(cv2.CAP_PROP_POS_FRAMES, my_start)
-    cap2.set(cv2.CAP_PROP_POS_FRAMES, pro_start)
+    cap1.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(my_start or 0)))
+    cap2.set(cv2.CAP_PROP_POS_FRAMES, max(0, int(pro_start or 0)))
 
     w1, h1 = int(cap1.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap1.get(cv2.CAP_PROP_FRAME_HEIGHT))
     w2, h2 = int(cap2.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap2.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    # height を揃える（横に並べるため）
     height = max(h1, h2)
     width = w1 + w2
+    fps = cap1.get(cv2.CAP_PROP_FPS) or 30
 
-    out = cv2.VideoWriter(out_path,
-                          cv2.VideoWriter_fourcc(*"mp4v"),
-                          30,
-                          (width, height))
+    out = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
 
     while True:
         r1, f1 = cap1.read()
         r2, f2 = cap2.read()
-
         if not r1 or not r2:
             break
 
-        # サイズ調整（高さ揃え）
         if f1.shape[0] != height:
             f1 = cv2.resize(f1, (w1, height))
         if f2.shape[0] != height:
@@ -227,30 +243,138 @@ def render_side_by_side(my_video, pro_video, my_start, pro_start, out_path):
     cap2.release()
     out.release()
 
-def main(my_swing, ref_swing, out_dir):
-    mp_pose = mp.solutions.pose
-    pose = mp_pose.Pose(static_image_mode=False,
-                        model_complexity=1,
-                        min_tracking_confidence=0.5,
-                        min_detection_confidence=0.5)
+if "result" not in st.session_state:
+    st.session_state.result = None
 
-    s_my, t_my, im_my, e_my = render_hud(pose, my_swing, out_dir, "my_swing")
-    s_pro, t_pro, im_pro, e_pro = render_hud(pose, ref_swing, out_dir, "pro_swing")
+# ---------------------------
+# Streamlit UI
+# ---------------------------
+st.set_page_config(page_title="Golf Swing Analyzer", layout="wide")
+st.title("⛳ Golf Swing Analyzer (Streamlit)")
 
-    # --- side-by-side output ---
-    render_side_by_side(
-        f"{out_dir}/swing_overlay_my_swing.mp4",
-        f"{out_dir}/swing_overlay_pro_swing.mp4",
-        s_my, s_pro,
-        f"{out_dir}/swing_compare_side_by_side.mp4"
-    )
+st.markdown("""
+アップロードした動画を MediaPipe で解析して HUD を付けた動画を出力します。
+（処理は CPU で行われるため動画長に応じて時間がかかります）
+""")
 
+col1, col2 = st.columns(2)
+with col1:
+    my_file = st.file_uploader("あなたのスイング動画（my）", type=["mp4","mov","avi","mkv"])
+with col2:
+    pro_file = st.file_uploader("比較用プロ動画（pro）", type=["mp4","mov","avi","mkv"])
 
-if __name__=="__main__":
-    import argparse
-    p=argparse.ArgumentParser()
-    p.add_argument("--my_swing",required=True)
-    p.add_argument("--pro_swing",required=True)
-    p.add_argument("--out",required=True)
-    a=p.parse_args()
-    main(a.my_swing, a.pro_swing, a.out)
+process_btn = st.button("解析開始")
+
+if process_btn:
+    if not my_file:
+        st.error("あなたのスイング動画をアップロードしてください。")
+    elif not pro_file:
+        st.error("比較用プロ動画をアップロードしてください。")
+    else:
+        # 一時保存
+        tmpdir = Path(tempfile.mkdtemp(prefix="swing_app_"))
+        my_path = tmpdir / "my_input.mp4"
+        pro_path = tmpdir / "pro_input.mp4"
+        my_path.write_bytes(my_file.read())
+        pro_path.write_bytes(pro_file.read())
+
+        st.info("解析中... (CPU 処理です。動画長により時間がかかります)")
+        progress = st.progress(0)
+
+        mp_pose = mp.solutions.pose
+
+        # --- my ---
+        progress.progress(5)
+        st.write("① あなたの動画から特徴量抽出...")
+        df_my = extract_metrics_from_video(str(my_path), mp_pose)
+        progress.progress(20)
+
+        hud_my_out = str(tmpdir / "swing_overlay_my.mp4")
+        s_my,t_my,im_my,e_my,df_my_processed = render_hud_video(str(my_path), df_my, hud_my_out, mp_pose)
+        progress.progress(60)
+
+        csv_my = str(tmpdir / "swing_metrics_my.csv")
+        df_my_processed.to_csv(csv_my, index=False)
+
+        # --- pro ---
+        st.write("② プロ動画から特徴量抽出...")
+        df_pro = extract_metrics_from_video(str(pro_path), mp_pose)
+        progress.progress(65)
+
+        hud_pro_out = str(tmpdir / "swing_overlay_pro.mp4")
+        s_pro,t_pro,im_pro,e_pro,df_pro_processed = render_hud_video(str(pro_path), df_pro, hud_pro_out, mp_pose)
+        progress.progress(85)
+
+        csv_pro = str(tmpdir / "swing_metrics_pro.csv")
+        df_pro_processed.to_csv(csv_pro, index=False)
+
+        # --- side by side ---
+        st.write("③ サイドバイサイド動画生成...")
+        side_out = str(tmpdir / "swing_compare_side_by_side.mp4")
+        render_side_by_side(hud_my_out, hud_pro_out, s_my or 0, s_pro or 0, side_out)
+        progress.progress(98)
+
+        st.session_state.result = {
+            "hud_my": hud_my_out,
+            "hud_pro": hud_pro_out,
+            "side": side_out,
+            "csv_my": csv_my,
+            "csv_pro": csv_pro,
+            "df_my": df_my_processed,
+            "df_pro": df_pro_processed,
+        }
+        st.success("解析完了！")
+        progress.progress(100)
+
+if st.session_state.result:
+    r = st.session_state.result
+
+    st.subheader("あなたのHUD動画")
+    st.video(r["hud_my"])
+    with open(r["hud_my"], "rb") as f:
+        st.download_button(
+            "ダウンロード（HUD: あなた）",
+            f.read(),
+            file_name="swing_overlay_my.mp4",
+            mime="video/mp4"
+        )
+
+    st.subheader("プロのHUD動画")
+    st.video(r["hud_pro"])
+    with open(r["hud_pro"], "rb") as f:
+        st.download_button(
+            "ダウンロード（HUD: プロ）",
+            f.read(),
+            file_name="swing_overlay_pro.mp4",
+            mime="video/mp4"
+        )
+
+    st.subheader("サイドバイサイド比較")
+    st.video(r["side"])
+    with open(r["side"], "rb") as f:
+        st.download_button(
+            "ダウンロード（比較）",
+            f.read(),
+            file_name="swing_compare_side_by_side.mp4",
+            mime="video/mp4"
+        )
+
+    st.subheader("CSV 出力")
+    st.write("あなたの解析結果（先頭）")
+    st.dataframe(r["df_my"].head())
+
+    with open(r["csv_my"], "rb") as f:
+        st.download_button(
+            "CSV ダウンロード（あなた）",
+            f.read(),
+            file_name="swing_metrics_my.csv",
+            mime="text/csv"
+        )
+
+    with open(r["csv_pro"], "rb") as f:
+        st.download_button(
+            "CSV ダウンロード（プロ）",
+            f.read(),
+            file_name="swing_metrics_pro.csv",
+            mime="text/csv"
+        )
