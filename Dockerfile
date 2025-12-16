@@ -38,6 +38,7 @@ USER appuser
 # Mount point for input/output (host folder with video and where CSV will be written)
 VOLUME ["/data"]
 
+EXPOSE 8501
 # Default command: expects /data/swing.mp4 to exist on the host mount
 # Run both swing analyzer and metrics overlay tool
-CMD ["bash", "-c", "python swing_overlay.py --my_swing /data/input/swing.mp4 --pro_swing /data/input/pro.mp4 --out /data/output"]
+CMD ["streamlit", "run", "swing_overlay.py", "--server.address=0.0.0.0", "--server.port=8501"]
