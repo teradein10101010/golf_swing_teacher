@@ -27,7 +27,8 @@ RUN pip install --no-cache-dir \
     streamlit
 
 # Copy application code
-COPY swing_overlay.py /app/swing_overlay.py
+COPY swing_analyzer.py /app/swing_analyzer.py
+COPY app.py /app/app.py
 # (optional) If you have a Streamlit wrapper, copy it as well
 # COPY streamlit_app.py /app/streamlit_app.py
 
@@ -41,4 +42,4 @@ VOLUME ["/data"]
 EXPOSE 8501
 # Default command: expects /data/swing.mp4 to exist on the host mount
 # Run both swing analyzer and metrics overlay tool
-CMD ["streamlit", "run", "swing_overlay.py", "--server.address=0.0.0.0", "--server.port=8501"]
+CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]
