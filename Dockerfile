@@ -29,6 +29,7 @@ RUN pip install --no-cache-dir \
 # Copy application code
 COPY swing_analyzer.py /app/swing_analyzer.py
 COPY app.py /app/app.py
+COPY pages /app/pages
 # (optional) If you have a Streamlit wrapper, copy it as well
 # COPY streamlit_app.py /app/streamlit_app.py
 
