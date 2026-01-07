@@ -4,6 +4,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import subprocess
+import base64
 
 from swing_analyzer import SwingAnalyzer
 
@@ -25,56 +26,6 @@ def to_h264(src: Path, dst: Path):
         str(dst)
     ], check=True)
 
-def render_side_by_side(v1, v2, s1, s2, out):
-    cap1 = cv2.VideoCapture(v1)
-    cap2 = cv2.VideoCapture(v2)
-
-    if not cap1.isOpened() or not cap2.isOpened():
-        raise RuntimeError("Failed to open input videos")
-
-    cap1.set(cv2.CAP_PROP_POS_FRAMES, max(0, s1 - 10))
-    cap2.set(cv2.CAP_PROP_POS_FRAMES, max(0, s2 - 10))
-
-    w1, h1 = int(cap1.get(3)), int(cap1.get(4))
-    w2, h2 = int(cap2.get(3)), int(cap2.get(4))
-    fps = cap1.get(cv2.CAP_PROP_FPS) or 30
-
-    tmp_out = out + ".tmp.mp4"
-
-    outv = cv2.VideoWriter(
-        tmp_out,
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        fps,
-        (w1 + w2, max(h1, h2))
-    )
-
-    if not outv.isOpened():
-        raise RuntimeError("VideoWriter failed")
-
-    while True:
-        r1, f1 = cap1.read()
-        r2, f2 = cap2.read()
-        if not r1 or not r2:
-            break
-
-        f1 = cv2.resize(f1, (w1, max(h1, h2)))
-        f2 = cv2.resize(f2, (w2, max(h1, h2)))
-        outv.write(np.hstack([f1, f2]))
-
-    cap1.release()
-    cap2.release()
-    outv.release()
-
-    # ffmpeg で H.264 に変換
-    import subprocess
-    subprocess.run([
-        "ffmpeg", "-y",
-        "-i", tmp_out,
-        "-vcodec", "libx264",
-        "-pix_fmt", "yuv420p",
-        out
-    ], check=True)
-
 # =====================================================
 # Streamlit UI
 # =====================================================
@@ -83,6 +34,9 @@ st.title("⛳ Golf Swing Analyzer")
 
 if "result" not in st.session_state:
     st.session_state.result = None
+
+if "jump_time" not in st.session_state:
+    st.session_state.jump_time = 0.0
 
 my_video = st.file_uploader("あなたのスイング動画", ["mp4", "mov"])
 
@@ -117,7 +71,7 @@ if st.button("解析開始"):
         st.write("② 動画生成中")
         my_hud_raw = tmp / "my_hud_raw.mp4"
 
-        s1, t1, im1, e1 = analyzer.render_hud(
+        events, fps1 = analyzer.render_hud(
             str(my_path),
             df_my,
             str(my_hud_raw),
@@ -130,7 +84,10 @@ if st.button("解析開始"):
         progress.progress(1.0)
 
         st.session_state.result = {
-            "my": load_bytes(my_hud),
+            "video_path": str(my_hud),
+            "video_bytes": load_bytes(my_hud),
+            "fps": fps1,
+            "events": events
         }
 
         st.success("解析完了！")
@@ -143,10 +100,67 @@ if st.session_state.result:
     r = st.session_state.result
 
     st.subheader("あなたのスイング")
-    st.video(r["my"], width=420)
+
+    # -------------------------------
+    # ジャンプボタン（★追加）
+    # -------------------------------
+    cols = st.columns(4)
+    for col, (label, frame) in zip(cols, r["events"].items()):
+        with col:
+            if st.button(label):
+                st.session_state.jump_time = frame / r["fps"]
+
+    st.caption(f"Jump to: {st.session_state.jump_time:.2f} sec")
+
+    # -------------------------------
+    # HTML Video（レスポンシブ版）
+    # -------------------------------
+    video_base64 = base64.b64encode(r["video_bytes"]).decode()
+
+    # 動画のメタデータ（幅・高さ）を取得してアスペクト比を計算
+    # ※SwingAnalyzer側で元動画のw, hを取得している場合はそれを使ってください
+    # ここでは一般的な16:9をデフォルトにしつつ、JSで動的に調整します
+
+    video_html = f"""
+    <div id="container" style="width:100%; max-width:100%; margin:auto; background:black; line-height:0;">
+      <video id="video" controls playsinline style="width:100%; height:auto; max-height:80vh;">
+        <source src="data:video/mp4;base64,{video_base64}" type="video/mp4">
+      </video>
+    </div>
+
+    <script>
+      const v = document.getElementById("video");
+      const container = document.getElementById("container");
+
+      // 1. 親iframeの高さをコンテンツに合わせる関数
+      function updateHeight() {{
+        const height = container.offsetHeight;
+        window.parent.postMessage({{
+          type: 'streamlit:setFrameHeight',
+          height: height
+        }}, '*');
+      }}
+
+      // 2. 動画の読み込み完了時にサイズ調整とシークを実行
+      v.onloadedmetadata = function() {{
+        v.currentTime = {st.session_state.jump_time};
+        updateHeight();
+      }};
+
+      // ウィンドウサイズが変わったときも再計算
+      window.addEventListener('resize', updateHeight);
+
+      // 初期実行
+      setTimeout(updateHeight, 500);
+    </script>
+    """
+
+    # ポイント: 最初は少し大きめのheightを指定しておき、JSが実行されると最適化されます
+    st.components.v1.html(video_html, height=800, scrolling=False)
+
     st.download_button(
         "📥 ダウンロード",
-        r["my"],
+        r["video_bytes"],
         file_name="my_swing_hud.mp4",
         mime="video/mp4"
     )
