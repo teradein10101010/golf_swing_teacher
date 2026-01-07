@@ -1,5 +1,5 @@
 # Dockerfile for running swing_analyzer.py
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 # noninteractive
 ENV DEBIAN_FRONTEND=noninteractive
