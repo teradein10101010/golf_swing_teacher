@@ -202,4 +202,11 @@ class SwingAnalyzer:
 
         cap.release()
         out.release()
-        return s, t, im, e
+
+        events = {
+            "Start": s,
+            "Top": t,
+            "Impact": im,
+            "Finish": e,
+        }
+        return events, fps
