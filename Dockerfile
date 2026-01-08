@@ -1,10 +1,8 @@
 # Dockerfile for running swing_analyzer.py
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 # noninteractive
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
 RUN apt-get update \
