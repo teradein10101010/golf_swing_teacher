@@ -10,6 +10,8 @@ function App() {
   const [videoURL, setVideoURL] = useState(null);
   const [events, setEvents] = useState(null);
   const [fps, setFps] = useState(30);
+  const [progress, setProgress] = useState(0);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const handleFileSelect = (file) => {
     if (!file) return;
@@ -21,7 +23,8 @@ function App() {
   };
 
   const handleAnalyze = async () => {
-    if (!selectedFile) return;
+    setIsAnalyzing(true);
+    setProgress(0);
 
     const form = new FormData();
     form.append("video", selectedFile);
@@ -31,11 +34,24 @@ function App() {
       body: form,
     });
 
-    const data = await res.json();
+    const { job_id } = await res.json();
 
-    setVideoURL(API_BASE + data.video_url);
-    setEvents(data.events);
-    setFps(data.fps);
+    const es = new EventSource(`${API_BASE}/api/analyze/progress/${job_id}`);
+
+    es.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+
+      setProgress(data.progress);
+
+      if (data.status === "done") {
+        es.close();
+        setIsAnalyzing(false);
+
+        setVideoURL(API_BASE + data.result.video_url);
+        setEvents(data.result.events);
+        setFps(data.result.fps);
+      }
+    };
   };
 
   const jump = (frame) => {
@@ -65,11 +81,7 @@ function App() {
         {originalVideoURL && (
           <>
             <h3 style={styles.sectionTitle}>🎥 元動画</h3>
-            <video
-              src={originalVideoURL}
-              controls
-              style={styles.video}
-            />
+            <video src={originalVideoURL} controls style={styles.video} />
           </>
         )}
 
@@ -85,6 +97,31 @@ function App() {
         </button>
       </div>
 
+      {isAnalyzing && (
+        <div style={{ marginTop: 16 }}>
+          <div
+            style={{
+              height: 10,
+              background: "#334155",
+              borderRadius: 999,
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                width: `${progress}%`,
+                height: "100%",
+                background: "linear-gradient(90deg,#22c55e,#16a34a)",
+                transition: "width 0.2s ease",
+              }}
+            />
+          </div>
+          <p style={{ fontSize: 12, marginTop: 6, color: "#cbd5e1" }}>
+            解析中… {progress}%
+          </p>
+        </div>
+      )}
+
       {/* Result Card */}
       {videoURL && (
         <div style={styles.card}>
@@ -97,12 +134,7 @@ function App() {
             <JumpButton label="Finish" onClick={() => jump(events.finish)} />
           </div>
 
-          <video
-            ref={videoRef}
-            src={videoURL}
-            controls
-            style={styles.video}
-          />
+          <video ref={videoRef} src={videoURL} controls style={styles.video} />
         </div>
       )}
     </div>

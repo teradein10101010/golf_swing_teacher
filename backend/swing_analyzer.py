@@ -6,20 +6,28 @@ import mediapipe as mp
 import numpy as np
 import pandas as pd
 
-VISIBLE_POINTS = [11,12,13,14,15,16,23,24,25,26,27,28]
+VISIBLE_POINTS = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 POSE_CONNECTIONS = [
-    (11,13),(13,15),(12,14),(14,16),
-    (11,23),(23,25),(25,27),
-    (12,24),(24,26),(26,28),
-    (11,12),(23,24)
+    (11, 13),
+    (13, 15),
+    (12, 14),
+    (14, 16),
+    (11, 23),
+    (23, 25),
+    (25, 27),
+    (12, 24),
+    (24, 26),
+    (26, 28),
+    (11, 12),
+    (23, 24),
 ]
 
 EVENT_COLORS = {
-    "start":  (255,255,0),
-    "top":    (255,0,0),
-    "impact": (0,0,255),
-    "finish": (0,255,255),
-    None:     (0,255,0)
+    "start": (255, 255, 0),
+    "top": (255, 0, 0),
+    "impact": (0, 0, 255),
+    "finish": (0, 255, 255),
+    None: (0, 255, 0),
 }
 
 
@@ -66,19 +74,13 @@ class SwingAnalyzer:
                 lm = res.pose_landmarks.landmark
 
                 sh = self.calc_angle(
-                    (lm[11].x, lm[11].y),
-                    (lm[23].x, lm[23].y),
-                    (lm[12].x, lm[12].y)
+                    (lm[11].x, lm[11].y), (lm[23].x, lm[23].y), (lm[12].x, lm[12].y)
                 )
                 hip = self.calc_angle(
-                    (lm[23].x, lm[23].y),
-                    (lm[25].x, lm[25].y),
-                    (lm[27].x, lm[27].y)
+                    (lm[23].x, lm[23].y), (lm[25].x, lm[25].y), (lm[27].x, lm[27].y)
                 )
                 el = self.calc_angle(
-                    (lm[13].x, lm[13].y),
-                    (lm[11].x, lm[11].y),
-                    (lm[23].x, lm[23].y)
+                    (lm[13].x, lm[13].y), (lm[11].x, lm[11].y), (lm[23].x, lm[23].y)
                 )
 
                 wx, wy = lm[16].x, lm[16].y
@@ -98,8 +100,8 @@ class SwingAnalyzer:
                 "wrist_x",
                 "wrist_y",
                 "club_x",
-                "club_y"
-            ]
+                "club_y",
+            ],
         )
 
     # =========================
@@ -107,8 +109,8 @@ class SwingAnalyzer:
     # =========================
     def detect_events(self, df):
         for x, y, vx, vy in [
-            ("wrist_x","wrist_y","wrist_vx","wrist_vy"),
-            ("club_x","club_y","club_vx","club_vy")
+            ("wrist_x", "wrist_y", "wrist_vx", "wrist_vy"),
+            ("club_x", "club_y", "club_vx", "club_vy"),
         ]:
             df = self.compute_velocity(df, x, y, vx, vy)
 
@@ -122,21 +124,21 @@ class SwingAnalyzer:
     def detect_start(self, df, win=10, thr=-0.003, min_count=5):
         dy = df["wrist_y"].diff().fillna(0)
         for i in range(len(dy) - win):
-            if (dy.iloc[i:i+win] < thr).sum() >= min_count:
+            if (dy.iloc[i : i + win] < thr).sum() >= min_count:
                 return i
         return 0
 
     def detect_top(self, df, start, win=3):
         diff = df["wrist_y"].diff().iloc[start:]
-        for i in range(len(diff)-win):
-            if diff.iloc[i:i+win].mean() > 0.005:
+        for i in range(len(diff) - win):
+            if diff.iloc[i : i + win].mean() > 0.005:
                 return i + start
         return start + 10
 
     def detect_finish(self, df, top, win=10):
         diff = df["shoulder_angle"].diff().abs().iloc[top:]
-        for i in range(len(diff)-win):
-            if diff.iloc[i:i+win].mean() < 1:
+        for i in range(len(diff) - win):
+            if diff.iloc[i : i + win].mean() < 1:
                 return i + top
         return len(df) - 1
 
@@ -161,11 +163,23 @@ class SwingAnalyzer:
             x2, y2 = int(lm[j].x * w), int(lm[j].y * h)
             cv2.line(frame, (x1, y1), (x2, y2), color, 4)
 
-    def render_hud(self, video_path, df, out_path, progress=None, base=0.0):
+    def render_hud(self, video_path, df, out_path, progress_cb=None):
         out_path = Path(out_path)
         tmp_path = out_path.with_suffix(".raw.mp4")
 
+        if progress_cb:
+            progress_cb(5)
+
+        # ===== イベント検出（元動画基準） =====
         s, t, im, e = self.detect_events(df)
+
+        # ===== 書き出し範囲 =====
+        start_idx = max(t - 50, 0)
+        end_idx = min(e + 50, len(df) - 1)
+        span = end_idx - start_idx + 1
+
+        if progress_cb:
+            progress_cb(15)
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -174,39 +188,46 @@ class SwingAnalyzer:
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # ★ codec を mp4v に変更
+        # ★ ここが超重要（Top-50 にジャンプ）
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_idx)
+
         out = cv2.VideoWriter(
             tmp_path,
             cv2.VideoWriter_fourcc(*"mp4v"),
             fps,
-            (w, h)
+            (w, h),
         )
-
-        # ★ 失敗チェック（超重要）
         if not out.isOpened():
             cap.release()
-            raise RuntimeError(f"VideoWriter failed to open: {out_path}")
+            raise RuntimeError("VideoWriter failed")
 
+        if progress_cb:
+            progress_cb(30)
+
+        # ===== 描画ループ =====
         with self.mp_pose.Pose() as pose:
             idx = 0
-            while True:
+            while idx < span:
                 ret, frame = cap.read()
-                if not ret or idx >= len(df):
+                if not ret:
                     break
+
+                # ★ 元動画の正しいフレーム番号
+                frame_idx = start_idx + idx
 
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 res = pose.process(rgb)
 
+                # ===== イベント判定（絶対フレームで比較） =====
                 event = None
-                if idx == s:
+                if frame_idx == s:
                     event = "start"
-                elif idx == t:
+                elif frame_idx == t:
                     event = "top"
-                elif idx == im:
+                elif frame_idx == im:
                     event = "impact"
-                elif idx == e:
+                elif frame_idx == e:
                     event = "finish"
 
                 color = EVENT_COLORS[event]
@@ -216,32 +237,43 @@ class SwingAnalyzer:
 
                 out.write(frame)
 
-                if progress:
-                    progress.progress(min(base + idx / total * 0.25, 1.0))
+                if progress_cb:
+                    progress = 30 + int(idx / span * 50)
+                    progress_cb(progress)
 
                 idx += 1
 
         cap.release()
         out.release()
 
-        # ==========================
-        # ② ffmpegでブラウザ対応に変換
-        # ==========================
-        subprocess.run([
-            "ffmpeg", "-y",
-            "-i", str(tmp_path),
-            "-vcodec", "libx264",
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
-            str(out_path)
-        ], check=True)
+        if progress_cb:
+            progress_cb(85)
+
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(tmp_path),
+                "-vcodec",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(out_path),
+            ],
+            check=True,
+        )
 
         tmp_path.unlink()
 
-        events = {
-            "Start": s,
-            "Top": t,
-            "Impact": im,
-            "Finish": e,
-        }
-        return events, fps
+        if progress_cb:
+            progress_cb(100)
+
+        return {
+            "Start": s - start_idx,
+            "Top": t - start_idx,
+            "Impact": im - start_idx,
+            "Finish": e - start_idx,
+        }, fps
