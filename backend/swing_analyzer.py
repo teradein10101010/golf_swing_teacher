@@ -1,3 +1,6 @@
+from pathlib import Path
+import subprocess
+
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -159,19 +162,32 @@ class SwingAnalyzer:
             cv2.line(frame, (x1, y1), (x2, y2), color, 4)
 
     def render_hud(self, video_path, df, out_path, progress=None, base=0.0):
+        out_path = Path(out_path)
+        tmp_path = out_path.with_suffix(".raw.mp4")
+
         s, t, im, e = self.detect_events(df)
 
         cap = cv2.VideoCapture(video_path)
-        w, h = int(cap.get(3)), int(cap.get(4))
+        if not cap.isOpened():
+            raise RuntimeError("Failed to open input video")
+
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS) or 30
         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
+        # ★ codec を mp4v に変更
         out = cv2.VideoWriter(
-            out_path,
+            tmp_path,
             cv2.VideoWriter_fourcc(*"mp4v"),
             fps,
             (w, h)
         )
+
+        # ★ 失敗チェック（超重要）
+        if not out.isOpened():
+            cap.release()
+            raise RuntimeError(f"VideoWriter failed to open: {out_path}")
 
         with self.mp_pose.Pose() as pose:
             idx = 0
@@ -184,10 +200,14 @@ class SwingAnalyzer:
                 res = pose.process(rgb)
 
                 event = None
-                if idx == s: event = "start"
-                elif idx == t: event = "top"
-                elif idx == im: event = "impact"
-                elif idx == e: event = "finish"
+                if idx == s:
+                    event = "start"
+                elif idx == t:
+                    event = "top"
+                elif idx == im:
+                    event = "impact"
+                elif idx == e:
+                    event = "finish"
 
                 color = EVENT_COLORS[event]
 
@@ -198,10 +218,25 @@ class SwingAnalyzer:
 
                 if progress:
                     progress.progress(min(base + idx / total * 0.25, 1.0))
+
                 idx += 1
 
         cap.release()
         out.release()
+
+        # ==========================
+        # ② ffmpegでブラウザ対応に変換
+        # ==========================
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-i", str(tmp_path),
+            "-vcodec", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            str(out_path)
+        ], check=True)
+
+        tmp_path.unlink()
 
         events = {
             "Start": s,

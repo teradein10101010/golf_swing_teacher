@@ -4,6 +4,8 @@ services:
     container_name: golf-backend
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend/videos:/app/backend/videos
 
   frontend:
     build: ./frontend
