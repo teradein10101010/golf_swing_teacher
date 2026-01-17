@@ -1,108 +1,193 @@
 import { useRef, useState } from "react";
 
-const API_BASE =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_BASE = "http://localhost:8000";
 
 function App() {
   const videoRef = useRef(null);
 
-  const [videoFile, setVideoFile] = useState(null);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [originalVideoURL, setOriginalVideoURL] = useState(null);
   const [videoURL, setVideoURL] = useState(null);
   const [events, setEvents] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [fps, setFps] = useState(30);
 
-  // 動画選択
-  const handleSelectVideo = (e) => {
-    const file = e.target.files[0];
+  const handleFileSelect = (file) => {
     if (!file) return;
 
-    setVideoFile(file);
-    setVideoURL(URL.createObjectURL(file));
+    setSelectedFile(file);
+    setOriginalVideoURL(URL.createObjectURL(file));
+    setVideoURL(null);
     setEvents(null);
   };
 
-  // 解析リクエスト
   const handleAnalyze = async () => {
-    if (!videoFile) return;
+    if (!selectedFile) return;
 
-    const formData = new FormData();
-    formData.append("video", videoFile); // ← ★超重要
+    const form = new FormData();
+    form.append("video", selectedFile);
 
-    setLoading(true);
+    const res = await fetch(`${API_BASE}/api/analyze/single`, {
+      method: "POST",
+      body: form,
+    });
 
-    try {
-      const res = await fetch(`${API_BASE}/api/analyze/single`, {
-        method: "POST",
-        body: formData,
-      });
+    const data = await res.json();
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text);
-      }
+    setVideoURL(API_BASE + data.video_url);
+    setEvents(data.events);
+    setFps(data.fps);
+  };
 
-      const data = await res.json();
-      setEvents(data.events);
-    } catch (err) {
-      console.error(err);
-      alert("解析に失敗しました");
-    } finally {
-      setLoading(false);
+  const jump = (frame) => {
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.currentTime = frame / fps;
     }
   };
 
-  // フレームジャンプ
-  const jumpToFrame = (frame) => {
-    if (!videoRef.current) return;
-
-    const fps = 30; // backend から返すなら置き換え
-    videoRef.current.currentTime = frame / fps;
-  };
-
   return (
-    <div style={{ padding: 24, maxWidth: 800, margin: "0 auto" }}>
-      <h1>🏌️ Golf Swing Analyzer</h1>
+    <div style={styles.page}>
+      <h1 style={styles.title}>🏌️ Golf Swing Analyzer</h1>
+      <p style={styles.subtitle}>Upload your swing and analyze key moments</p>
 
-      <input type="file" accept="video/*" onChange={handleSelectVideo} />
+      {/* Upload Card */}
+      <div style={styles.card}>
+        <label style={styles.fileLabel}>
+          動画を選択
+          <input
+            type="file"
+            accept="video/mp4"
+            hidden
+            onChange={(e) => handleFileSelect(e.target.files[0])}
+          />
+        </label>
 
+        {originalVideoURL && (
+          <>
+            <h3 style={styles.sectionTitle}>🎥 元動画</h3>
+            <video
+              src={originalVideoURL}
+              controls
+              style={styles.video}
+            />
+          </>
+        )}
+
+        <button
+          onClick={handleAnalyze}
+          disabled={!selectedFile}
+          style={{
+            ...styles.primaryButton,
+            opacity: selectedFile ? 1 : 0.5,
+          }}
+        >
+          解析する
+        </button>
+      </div>
+
+      {/* Result Card */}
       {videoURL && (
-        <div style={{ marginTop: 20 }}>
+        <div style={styles.card}>
+          <h3 style={styles.sectionTitle}>📊 解析結果</h3>
+
+          <div style={styles.jumpButtons}>
+            <JumpButton label="Start" onClick={() => jump(events.start)} />
+            <JumpButton label="Top" onClick={() => jump(events.top)} />
+            <JumpButton label="Impact" onClick={() => jump(events.impact)} />
+            <JumpButton label="Finish" onClick={() => jump(events.finish)} />
+          </div>
+
           <video
             ref={videoRef}
             src={videoURL}
             controls
-            style={{ width: "100%", borderRadius: 8 }}
+            style={styles.video}
           />
-        </div>
-      )}
-
-      {videoFile && (
-        <button
-          onClick={handleAnalyze}
-          disabled={loading}
-          style={{ marginTop: 16, padding: "8px 16px", fontSize: 16 }}
-        >
-          {loading ? "解析中..." : "スイング解析"}
-        </button>
-      )}
-
-      {events && (
-        <div style={{ marginTop: 24 }}>
-          <h3>📍 スイング局面ジャンプ</h3>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => jumpToFrame(events.start)}>Start</button>
-            <button onClick={() => jumpToFrame(events.top)}>Top</button>
-            <button onClick={() => jumpToFrame(events.impact)}>Impact</button>
-            <button onClick={() => jumpToFrame(events.finish)}>Finish</button>
-          </div>
-
-          <pre style={{ marginTop: 16 }}>
-            {JSON.stringify(events, null, 2)}
-          </pre>
         </div>
       )}
     </div>
   );
 }
+
+const JumpButton = ({ label, onClick }) => (
+  <button onClick={onClick} style={styles.jumpButton}>
+    {label}
+  </button>
+);
+
+/* =====================
+   Styles
+===================== */
+const styles = {
+  page: {
+    minHeight: "100vh",
+    background: "linear-gradient(135deg, #0f2027, #203a43, #2c5364)",
+    color: "#fff",
+    padding: 32,
+    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont",
+  },
+  title: {
+    textAlign: "center",
+    fontSize: 36,
+    marginBottom: 4,
+  },
+  subtitle: {
+    textAlign: "center",
+    color: "#cbd5e1",
+    marginBottom: 32,
+  },
+  card: {
+    background: "#0b1220",
+    maxWidth: 520,
+    margin: "0 auto 32px",
+    padding: 24,
+    borderRadius: 16,
+    boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
+  },
+  sectionTitle: {
+    marginBottom: 12,
+    fontSize: 18,
+  },
+  fileLabel: {
+    display: "inline-block",
+    padding: "10px 16px",
+    borderRadius: 10,
+    background: "#1e293b",
+    cursor: "pointer",
+    marginBottom: 16,
+  },
+  primaryButton: {
+    width: "100%",
+    marginTop: 16,
+    padding: "12px 0",
+    borderRadius: 12,
+    border: "none",
+    background: "linear-gradient(90deg, #22c55e, #16a34a)",
+    color: "#fff",
+    fontSize: 16,
+    cursor: "pointer",
+  },
+  jumpButtons: {
+    display: "flex",
+    gap: 8,
+    marginBottom: 12,
+    flexWrap: "wrap",
+  },
+  jumpButton: {
+    padding: "6px 12px",
+    borderRadius: 999,
+    border: "none",
+    background: "#334155",
+    color: "#fff",
+    cursor: "pointer",
+  },
+  video: {
+    width: "100%",
+    aspectRatio: "16 / 9",
+    borderRadius: 12,
+    marginTop: 12,
+    background: "#000",
+  },
+};
 
 export default App;
