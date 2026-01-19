@@ -72,7 +72,7 @@ function App() {
           動画を選択
           <input
             type="file"
-            accept="video/mp4"
+            accept="video/*"
             hidden
             onChange={(e) => handleFileSelect(e.target.files[0])}
           />
