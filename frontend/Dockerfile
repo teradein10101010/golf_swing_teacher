@@ -5,6 +5,7 @@ WORKDIR /app
 # 依存関係
 COPY package.json package-lock.json* ./
 RUN npm install
+RUN npm install react-router-dom
 
 # アプリコード
 COPY . .
