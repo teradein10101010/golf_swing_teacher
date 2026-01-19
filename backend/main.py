@@ -108,6 +108,61 @@ async def analyze_single(video: UploadFile = File(...)):
     return {"job_id": job_id}
 
 
+# =====================================================
+# ★ 比較スイング解析 API
+# =====================================================
+@app.post("/api/analyze/compare")
+async def analyze_compare(left: UploadFile = File(...), right: UploadFile = File(...)):
+    job_id = uuid.uuid4().hex
+    progress_store[job_id] = {"status": "processing", "progress": 0}
+
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix=".mp4"
+    ) as f1, tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as f2:
+        f1.write(await left.read())
+        f2.write(await right.read())
+        left_path = f1.name
+        right_path = f2.name
+
+    async def run():
+        # ① 特徴量抽出
+        df_l = analyzer.extract_metrics(left_path)
+        df_r = analyzer.extract_metrics(right_path)
+        progress_store[job_id]["progress"] = 20
+
+        # ② HUD 動画生成
+        l_name = f"compare_left_{job_id}.mp4"
+        r_name = f"compare_right_{job_id}.mp4"
+        l_path = VIDEOS_DIR / l_name
+        r_path = VIDEOS_DIR / r_name
+
+        def cb(p):
+            progress_store[job_id]["progress"] = 20 + int(p * 0.8)
+
+        ev_l, fps_l = analyzer.render_hud(left_path, df_l, str(l_path), progress_cb=cb)
+        ev_r, fps_r = analyzer.render_hud(right_path, df_r, str(r_path), progress_cb=cb)
+
+        progress_store[job_id] = {
+            "status": "done",
+            "progress": 100,
+            "result": {
+                "left": {
+                    "video_url": f"/videos/{l_name}",
+                    "events": {k.lower(): int(v) for k, v in ev_l.items()},
+                    "fps": fps_l,
+                },
+                "right": {
+                    "video_url": f"/videos/{r_name}",
+                    "events": {k.lower(): int(v) for k, v in ev_r.items()},
+                    "fps": fps_r,
+                },
+            },
+        }
+
+    asyncio.create_task(run())
+    return {"job_id": job_id}
+
+
 # =========================
 # progress 取得（SSE）
 # =========================
