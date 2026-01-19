@@ -160,7 +160,7 @@ function CompareAnalysis() {
           動画Aを選択
           <input
             type="file"
-            accept="video/mp4"
+            accept="video/*"
             hidden
             onChange={(e) => onSelectA(e.target.files[0])}
           />
@@ -170,7 +170,7 @@ function CompareAnalysis() {
           動画Bを選択
           <input
             type="file"
-            accept="video/mp4"
+            accept="video/*"
             hidden
             onChange={(e) => onSelectB(e.target.files[0])}
           />
