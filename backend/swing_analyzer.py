@@ -163,6 +163,77 @@ class SwingAnalyzer:
             x2, y2 = int(lm[j].x * w), int(lm[j].y * h)
             cv2.line(frame, (x1, y1), (x2, y2), color, 4)
 
+    def export_with_frame_index(self, video_path, out_path, progress_cb=None):
+
+        out_path = Path(out_path)
+        tmp_path = out_path.with_suffix(".raw.mp4")
+
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise RuntimeError("Failed to open input video")
+
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        out = cv2.VideoWriter(
+            str(tmp_path),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            fps,
+            (w, h),
+        )
+        if not out.isOpened():
+            cap.release()
+            raise RuntimeError("VideoWriter failed")
+
+        idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            # ★ 実フレーム番号（元動画基準）
+            frame_idx = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+
+            # フレーム番号描画
+            cv2.putText(
+                frame,
+                f"Frame: {frame_idx}",
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (0, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+            out.write(frame)
+            idx += 1
+
+        cap.release()
+        out.release()
+
+        # ブラウザ再生向けに再エンコード
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(tmp_path),
+                "-vcodec",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(out_path),
+            ],
+            check=True,
+        )
+
+        tmp_path.unlink()
+
     def render_hud(self, video_path, df, out_path, progress_cb=None):
         out_path = Path(out_path)
         tmp_path = out_path.with_suffix(".raw.mp4")
@@ -174,8 +245,8 @@ class SwingAnalyzer:
         s, t, im, e = self.detect_events(df)
 
         # ===== 書き出し範囲 =====
-        start_idx = max(t - 50, 0)
-        end_idx = min(e + 50, len(df) - 1)
+        start_idx = max(s - 5, 0)
+        end_idx = min(e + 5, len(df) - 1)
         span = end_idx - start_idx + 1
 
         if progress_cb:
@@ -187,9 +258,13 @@ class SwingAnalyzer:
 
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30
+        fps = cap.get(cv2.CAP_PROP_FPS)
 
-        # ★ ここが超重要（Top-50 にジャンプ）
+        print(
+            f"start_idx: {start_idx}. start: {s}, top: {t}, impact: {im}, finish: {e}, fps: {fps}"
+        )
+
+        # ★ ここが超重要（start-5 にジャンプ）
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_idx)
 
         out = cv2.VideoWriter(
@@ -216,20 +291,22 @@ class SwingAnalyzer:
                 # ★ 元動画の正しいフレーム番号
                 frame_idx = start_idx + idx
 
+                cv2.putText(
+                    frame,
+                    f"Frame: {frame_idx}",
+                    (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.0,
+                    (0, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 res = pose.process(rgb)
 
                 # ===== イベント判定（絶対フレームで比較） =====
                 event = None
-                if frame_idx == s:
-                    event = "start"
-                elif frame_idx == t:
-                    event = "top"
-                elif frame_idx == im:
-                    event = "impact"
-                elif frame_idx == e:
-                    event = "finish"
-
                 color = EVENT_COLORS[event]
 
                 if res.pose_landmarks:
