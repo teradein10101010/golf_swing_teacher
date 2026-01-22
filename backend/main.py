@@ -10,6 +10,7 @@ import uuid
 import asyncio
 import json
 from typing import Dict, Any
+import subprocess
 
 from swing_analyzer import SwingAnalyzer
 
@@ -24,6 +25,8 @@ progress_store: Dict[str, Dict[str, Any]] = {}
 BASE_DIR = Path(__file__).resolve().parent
 VIDEOS_DIR = BASE_DIR / "videos"
 VIDEOS_DIR.mkdir(exist_ok=True)
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
 
 # =========================
 # FastAPI app
@@ -38,8 +41,74 @@ app.add_middleware(
 )
 
 app.mount("/videos", StaticFiles(directory=VIDEOS_DIR), name="videos")
+app.mount("/data", StaticFiles(directory=DATA_DIR), name="data")
 
 analyzer = SwingAnalyzer()
+
+
+def ffmpeg_to_cfr(
+    input_path,
+    output_path,
+    fps=45,
+    overwrite=True,
+):
+    """
+    ffmpeg で動画を CFR（固定フレームレート）に変換する
+
+    Parameters
+    ----------
+    input_path : str or Path
+        入力動画
+    output_path : str or Path
+        出力動画
+    fps : int or float
+        固定フレームレート
+    overwrite : bool
+        Trueなら -y を付ける
+    """
+
+    input_path = str(input_path)
+    output_path = str(output_path)
+
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",  # ← 重要：エラーだけ表示
+    ]
+
+    if overwrite:
+        cmd.append("-y")
+
+    cmd += [
+        "-i",
+        input_path,
+        "-vsync",
+        "cfr",  # ★ 超重要
+        "-r",
+        str(fps),
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        output_path,
+    ]
+
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            "ffmpeg failed\n"
+            f"command: {' '.join(cmd)}\n"
+            f"stderr:\n{e.stderr.decode(errors='ignore')}"
+        )
 
 
 # =========================
@@ -48,6 +117,15 @@ analyzer = SwingAnalyzer()
 @app.post("/api/analyze/single")
 async def analyze_single(video: UploadFile = File(...)):
     job_id = uuid.uuid4().hex
+
+    src_name = f"src_{job_id}.mp4"
+    src_path = VIDEOS_DIR / src_name
+
+    hud_name = f"hud_{job_id}.mp4"
+    hud_path = VIDEOS_DIR / hud_name
+
+    data_name = f"data_{job_id}.csv"
+    data_path = DATA_DIR / data_name
 
     # ★ progress は必ず dict 構造
     progress_store[job_id] = {
@@ -58,10 +136,13 @@ async def analyze_single(video: UploadFile = File(...)):
     # 一時ファイル保存
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
         tmp.write(await video.read())
-        src_path = tmp.name
+        input_path = tmp.name
 
-    hud_name = f"hud_{job_id}.mp4"
-    hud_path = VIDEOS_DIR / hud_name
+    ffmpeg_to_cfr(
+        input_path=input_path,
+        output_path=src_path,
+        fps=30,
+    )
 
     # =========================
     # 同期処理（threadpool行き）
@@ -69,6 +150,7 @@ async def analyze_single(video: UploadFile = File(...)):
     def sync_run():
         try:
             df = analyzer.extract_metrics(src_path)
+            df.to_csv(str(data_path))
 
             def progress_cb(p: int):
                 progress_store[job_id]["progress"] = p
