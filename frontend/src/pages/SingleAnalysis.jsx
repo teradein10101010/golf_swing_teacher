@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 
 const API_BASE = "http://localhost:8000";
 
@@ -7,24 +7,41 @@ function App() {
 
   const [selectedFile, setSelectedFile] = useState(null);
   const [originalVideoURL, setOriginalVideoURL] = useState(null);
+
   const [videoURL, setVideoURL] = useState(null);
   const [events, setEvents] = useState(null);
   const [fps, setFps] = useState(30);
+
   const [progress, setProgress] = useState(0);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState(null);
+
+  /* =====================
+     ファイル選択
+  ===================== */
   const handleFileSelect = (file) => {
     if (!file) return;
 
     setSelectedFile(file);
     setOriginalVideoURL(URL.createObjectURL(file));
+
+    // リセット
     setVideoURL(null);
     setEvents(null);
+    setAiResult(null);
   };
 
+  /* =====================
+     解析開始
+  ===================== */
   const handleAnalyze = async () => {
+    if (!selectedFile) return;
+
     setIsAnalyzing(true);
     setProgress(0);
+    setAiResult(null);
 
     const form = new FormData();
     form.append("video", selectedFile);
@@ -40,7 +57,6 @@ function App() {
 
     es.onmessage = (e) => {
       const data = JSON.parse(e.data);
-
       setProgress(data.progress);
 
       if (data.status === "done") {
@@ -54,19 +70,46 @@ function App() {
     };
   };
 
+  /* =====================
+     フレームジャンプ
+  ===================== */
   const jump = (frame) => {
-    if (videoRef.current) {
-      videoRef.current.pause();
-      videoRef.current.currentTime = frame / fps;
-    }
+    if (!videoRef.current) return;
+    videoRef.current.pause();
+    videoRef.current.currentTime = frame / fps;
   };
 
+  /* =====================
+     AIコーチ
+  ===================== */
+  const handleAskAI = async () => {
+    if (!videoURL) return;
+
+    setAiLoading(true);
+    setAiResult(null);
+
+    const res = await fetch(`${API_BASE}/api/analyze/ai`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        video_path: videoURL.replace(API_BASE, ""),
+      }),
+    });
+
+    const data = await res.json();
+    setAiResult(data.advice);
+    setAiLoading(false);
+  };
+
+  /* =====================
+     Render
+  ===================== */
   return (
     <div style={styles.page}>
       <h1 style={styles.title}>🏌️ Golf Swing Analyzer</h1>
       <p style={styles.subtitle}>Upload your swing and analyze key moments</p>
 
-      {/* Upload Card */}
+      {/* Upload */}
       <div style={styles.card}>
         <label style={styles.fileLabel}>
           動画を選択
@@ -97,33 +140,23 @@ function App() {
         </button>
       </div>
 
+      {/* Progress */}
       {isAnalyzing && (
-        <div style={{ marginTop: 16 }}>
-          <div
-            style={{
-              height: 10,
-              background: "#334155",
-              borderRadius: 999,
-              overflow: "hidden",
-            }}
-          >
+        <div style={{ maxWidth: 520, margin: "0 auto 24px" }}>
+          <div style={styles.progressBar}>
             <div
               style={{
+                ...styles.progressFill,
                 width: `${progress}%`,
-                height: "100%",
-                background: "linear-gradient(90deg,#22c55e,#16a34a)",
-                transition: "width 0.2s ease",
               }}
             />
           </div>
-          <p style={{ fontSize: 12, marginTop: 6, color: "#cbd5e1" }}>
-            解析中… {progress}%
-          </p>
+          <p style={styles.progressText}>解析中… {progress}%</p>
         </div>
       )}
 
-      {/* Result Card */}
-      {videoURL && (
+      {/* Result */}
+      {videoURL && events && (
         <div style={styles.card}>
           <h3 style={styles.sectionTitle}>📊 解析結果</h3>
 
@@ -135,12 +168,31 @@ function App() {
           </div>
 
           <video ref={videoRef} src={videoURL} controls style={styles.video} />
+
+          {/* 👇 HUD動画生成後にだけ表示 */}
+          <button
+            onClick={handleAskAI}
+            disabled={aiLoading}
+            style={styles.primaryButton}
+          >
+            {aiLoading ? "AI解析中..." : "🤖 AIコーチに聞く"}
+          </button>
+
+          {aiResult && (
+            <div style={styles.aiBox}>
+              <h4>🤖 AIコーチのアドバイス</h4>
+              <p>{aiResult}</p>
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
+/* =====================
+   Components
+===================== */
 const JumpButton = ({ label, onClick }) => (
   <button onClick={onClick} style={styles.jumpButton}>
     {label}
@@ -153,16 +205,12 @@ const JumpButton = ({ label, onClick }) => (
 const styles = {
   page: {
     minHeight: "100vh",
-    background: "linear-gradient(135deg, #0f2027, #203a43, #2c5364)",
+    background: "linear-gradient(135deg,#0f2027,#203a43,#2c5364)",
     color: "#fff",
     padding: 32,
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont",
+    fontFamily: "system-ui",
   },
-  title: {
-    textAlign: "center",
-    fontSize: 36,
-    marginBottom: 4,
-  },
+  title: { textAlign: "center", fontSize: 36 },
   subtitle: {
     textAlign: "center",
     color: "#cbd5e1",
@@ -174,19 +222,14 @@ const styles = {
     margin: "0 auto 32px",
     padding: 24,
     borderRadius: 16,
-    boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
   },
-  sectionTitle: {
-    marginBottom: 12,
-    fontSize: 18,
-  },
+  sectionTitle: { marginBottom: 12 },
   fileLabel: {
     display: "inline-block",
     padding: "10px 16px",
     borderRadius: 10,
     background: "#1e293b",
     cursor: "pointer",
-    marginBottom: 16,
   },
   primaryButton: {
     width: "100%",
@@ -194,7 +237,7 @@ const styles = {
     padding: "12px 0",
     borderRadius: 12,
     border: "none",
-    background: "linear-gradient(90deg, #22c55e, #16a34a)",
+    background: "linear-gradient(90deg,#22c55e,#16a34a)",
     color: "#fff",
     fontSize: 16,
     cursor: "pointer",
@@ -217,8 +260,31 @@ const styles = {
     width: "100%",
     aspectRatio: "16 / 9",
     borderRadius: 12,
-    marginTop: 12,
     background: "#000",
+    marginTop: 12,
+  },
+  progressBar: {
+    height: 10,
+    background: "#334155",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  progressFill: {
+    height: "100%",
+    background: "linear-gradient(90deg,#22c55e,#16a34a)",
+    transition: "width 0.2s ease",
+  },
+  progressText: {
+    fontSize: 12,
+    marginTop: 6,
+    color: "#cbd5e1",
+  },
+  aiBox: {
+    marginTop: 20,
+    background: "#020617",
+    padding: 16,
+    borderRadius: 12,
+    whiteSpace: "pre-wrap",
   },
 };
 
