@@ -4,7 +4,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
 from fastapi.concurrency import run_in_threadpool
 
+from dotenv import load_dotenv
+
 from pathlib import Path
+from pydantic import BaseModel
 import tempfile
 import uuid
 import asyncio
@@ -17,6 +20,7 @@ from swing_analyzer import SwingAnalyzer
 # =========================
 # グローバル progress store
 # =========================
+load_dotenv()
 progress_store: Dict[str, Dict[str, Any]] = {}
 
 # =========================
@@ -269,3 +273,14 @@ async def analyze_progress(job_id: str):
         event_generator(),
         media_type="text/event-stream",
     )
+
+
+class AIRequest(BaseModel):
+    video_path: str  # HUD動画のパス
+
+
+@app.post("/api/analyze/ai")
+def analyze_ai(req: AIRequest):
+    video_path = VIDEOS_DIR / Path(req.video_path).name
+    advice = analyzer.analyze_video(video_path)
+    return {"advice": advice}
