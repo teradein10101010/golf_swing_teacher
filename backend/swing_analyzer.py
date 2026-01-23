@@ -1,10 +1,13 @@
 from pathlib import Path
 import subprocess
 
+import time
+import os
 import cv2
 import mediapipe as mp
 import numpy as np
 import pandas as pd
+from google import genai
 
 VISIBLE_POINTS = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 POSE_CONNECTIONS = [
@@ -354,3 +357,42 @@ class SwingAnalyzer:
             "Impact": im - start_idx,
             "Finish": e - start_idx,
         }, fps
+
+    def analyze_video(self, video_path: Path) -> str:
+        # 1. 動画アップロード
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY が設定されていません")
+        self.client = genai.Client(api_key=api_key)
+        video_file = self.client.files.upload(file=str(video_path))
+
+        # 2. 処理完了待ち
+        while video_file.state.name == "PROCESSING":
+            time.sleep(3)
+            video_file = self.client.files.get(name=video_file.name)
+
+        if video_file.state.name == "FAILED":
+            raise RuntimeError("AI動画処理に失敗しました")
+
+        # 3. AIに質問
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    video_file,
+                    """
+    あなたはプロゴルフコーチです。
+    このHUD付きスイング動画を見て以下を日本語で答えてください。
+
+    1. このスイングの良い点
+    2. 改善すべきポイント（最大3つ）
+    3. それぞれに対する具体的な練習方法
+
+    専門的だが初心者にも分かる説明にしてください。
+    """,
+                ],
+            )
+
+            return response.text
+        except errors.ServerError as e:
+            return "ただいま混雑しています。しばらく経ってから再度お試しください。"
