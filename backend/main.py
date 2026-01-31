@@ -1,11 +1,13 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, APIRouter, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.concurrency import run_in_threadpool
-
+import urllib.parse
 from dotenv import load_dotenv
 
+import os
+import stripe
 from pathlib import Path
 from pydantic import BaseModel
 import tempfile
@@ -21,6 +23,8 @@ from swing_analyzer import SwingAnalyzer
 # グローバル progress store
 # =========================
 load_dotenv()
+stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
+YOUR_DOMAIN = "http://localhost:5173"
 progress_store: Dict[str, Dict[str, Any]] = {}
 
 # =========================
@@ -39,7 +43,10 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        YOUR_DOMAIN,  # Vite
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -273,6 +280,77 @@ async def analyze_progress(job_id: str):
         event_generator(),
         media_type="text/event-stream",
     )
+
+
+@app.post("/api/create-checkout-session")
+async def create_checkout_session(request: Request):
+    try:
+        data = await request.json()
+        video_path = data.get("video_path", "")
+
+        encoded_video_path = urllib.parse.quote(video_path)
+
+        checkout_session = stripe.checkout.Session.create(
+            mode="payment",
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "jpy",
+                        "product_data": {
+                            "name": "AIゴルフスイング解析",
+                        },
+                        "unit_amount": 500,  # 500円
+                    },
+                    "quantity": 1,
+                },
+            ],
+            success_url=(
+                f"{YOUR_DOMAIN}"
+                f"?session_id={{CHECKOUT_SESSION_ID}}"
+                f"&video_path={encoded_video_path}"
+            ),
+            cancel_url=YOUR_DOMAIN,
+        )
+
+        # ⭐️ 重要：id ではなく url を返す
+        return {"url": checkout_session.url}
+
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/analyze/ai-paid")
+async def analyze_ai_paid(request: Request):
+    data = await request.json()
+    session_id = data.get("session_id")
+    video_url_path = data.get("video_path")  # "/videos/hud_xxx.mp4"
+
+    # 1. Stripe支払い確認（そのまま）
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+        if session.payment_status != "paid":
+            return JSONResponse(
+                status_code=403, content={"error": "支払いが完了していません"}
+            )
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "無効なセッションです"})
+
+    # 2. URLパス → 実ファイルパスに変換（★重要）
+    if not video_url_path:
+        raise HTTPException(status_code=400, detail="video_path is required")
+
+    filename = Path(video_url_path).name
+    video_file_path = VIDEOS_DIR / filename
+
+    if not video_file_path.exists():
+        raise HTTPException(
+            status_code=404, detail=f"Video file not found: {video_file_path}"
+        )
+
+    # 3. AI解析（実ファイルパスを渡す）
+    advice_text = analyzer.analyze_video(video_file_path)
+
+    return {"advice": advice_text}
 
 
 class AIRequest(BaseModel):
