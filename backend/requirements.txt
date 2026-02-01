@@ -8,3 +8,5 @@ uvicorn
 python-multipart
 google-genai>=0.3.0
 python-dotenv
+python-jose
+httpx

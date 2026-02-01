@@ -1,10 +1,12 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
 from fastapi.concurrency import run_in_threadpool
+from fastapi.security import HTTPBearer
 
 from dotenv import load_dotenv
+from jose import jwt
 
 from pathlib import Path
 from pydantic import BaseModel
@@ -16,6 +18,7 @@ from typing import Dict, Any
 import subprocess
 
 from swing_analyzer import SwingAnalyzer
+from auth import get_current_user
 
 # =========================
 # グローバル progress store
@@ -48,6 +51,7 @@ app.mount("/videos", StaticFiles(directory=VIDEOS_DIR), name="videos")
 app.mount("/data", StaticFiles(directory=DATA_DIR), name="data")
 
 analyzer = SwingAnalyzer()
+security = HTTPBearer()
 
 
 def ffmpeg_to_cfr(
@@ -113,6 +117,14 @@ def ffmpeg_to_cfr(
             f"command: {' '.join(cmd)}\n"
             f"stderr:\n{e.stderr.decode(errors='ignore')}"
         )
+
+
+@app.get("/api/me")
+def me(user=Depends(get_current_user)):
+    return {
+        "user_id": user["sub"],
+        "email": user.get("email"),
+    }
 
 
 # =========================
