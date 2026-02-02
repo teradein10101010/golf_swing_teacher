@@ -1,63 +1,72 @@
-import { NavLink } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
+import Auth from "./Auth";
 
-export default function Header() {
+export default function Header({ user, onUserChange }) {
+  const location = useLocation();
+
   return (
     <header style={styles.header}>
-      <div style={styles.logo}>🏌️ Swing Analyzer</div>
+      {/* Logo */}
+      <div style={styles.logo}>🏌️ Golf Swing Analyzer</div>
 
+      {/* Nav */}
       <nav style={styles.nav}>
-        <NavLink
+        <Link
           to="/"
-          end
-          style={({ isActive }) => (isActive ? styles.activeLink : styles.link)}
+          style={{
+            ...styles.navItem,
+            ...(location.pathname === "/" ? styles.navActive : {}),
+          }}
         >
           単体分析
-        </NavLink>
-
-        <NavLink
+        </Link>
+        <Link
           to="/compare"
-          style={({ isActive }) => (isActive ? styles.activeLink : styles.link)}
+          style={{
+            ...styles.navItem,
+            ...(location.pathname === "/compare" ? styles.navActive : {}),
+          }}
         >
           比較分析
-        </NavLink>
+        </Link>
       </nav>
+
+      {/* Auth */}
+      <Auth onUserChange={onUserChange} />
     </header>
   );
 }
 
 const styles = {
   header: {
+    height: 72,
+    padding: "0 24px",
     display: "flex",
-    justifyContent: "space-between",
     alignItems: "center",
-    padding: "12px 24px",
-    background: "linear-gradient(90deg, #0f2027, #203a43)",
-    color: "#ffffff",
-    boxShadow: "0 4px 20px rgba(0,0,0,0.25)",
+    justifyContent: "space-between",
+    borderRadius: 16,
+    background: "rgba(15, 32, 39, 0.8)",
+    backdropFilter: "blur(12px)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    color: "#fff",
   },
   logo: {
     fontSize: 18,
-    fontWeight: "bold",
-    letterSpacing: 0.5,
+    fontWeight: 700,
   },
   nav: {
     display: "flex",
-    gap: 12,
+    gap: 16,
   },
-  link: {
-    color: "#b0c4cc",
+  navItem: {
+    padding: "8px 14px",
+    borderRadius: 999,
     textDecoration: "none",
-    padding: "6px 14px",
-    borderRadius: 8,
+    color: "#cbd5e1",
     fontSize: 14,
-    transition: "all 0.2s ease",
   },
-  activeLink: {
-    color: "#ffffff",
-    background: "rgba(255,255,255,0.15)",
-    textDecoration: "none",
-    padding: "6px 14px",
-    borderRadius: 8,
-    fontSize: 14,
+  navActive: {
+    background: "rgba(255,255,255,0.12)",
+    color: "#fff",
   },
 };
