@@ -1,19 +1,12 @@
 import { useRef, useState, useEffect } from "react";
-import { loadStripe } from "@stripe/stripe-js";
+import { supabase } from "../lib/supabase";
 
 /* =====================
    環境変数（Vite）
 ===================== */
-const STRIPE_KEY = import.meta.env.VITE_STRIPE_PUBLIC_KEY;
 const API_BASE = import.meta.env.VITE_API_BASE;
 
-if (!STRIPE_KEY) {
-  console.error("Stripe Public Key is missing");
-}
-
-const stripePromise = loadStripe(STRIPE_KEY);
-
-function App() {
+function App({ user }) {
   const videoRef = useRef(null);
 
   // ... (既存のStateはそのまま)
@@ -26,6 +19,8 @@ function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
+  const [isEntitled, setIsEntitled] = useState(false);
+  const [isEntitlementLoading, setIsEntitlementLoading] = useState(false);
 
   // ★ 新規: 決済処理中のローディング
   const [isCheckingOut, setIsCheckingOut] = useState(false);
@@ -40,33 +35,107 @@ function App() {
     const videoPathParams = query.get("video_path"); // 復元用
 
     if (sessionId && videoPathParams) {
+      if (!user) {
+        alert("AIアドバイスの利用にはログインが必要です");
+        return;
+      }
       // 支払い成功として戻ってきた場合
       setVideoURL(API_BASE + videoPathParams);
       // ここで本来はjob_id等を使ってeventsデータも再取得するのがベスト
       // 簡易的にAI解析を即実行する
       verifyPaymentAndRunAI(sessionId, videoPathParams);
     }
-  }, []);
+  }, [user]);
+
+  useEffect(() => {
+    const fetchEntitlement = async () => {
+      if (!user) {
+        setIsEntitled(false);
+        setIsEntitlementLoading(false);
+        return;
+      }
+      setIsEntitlementLoading(true);
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) {
+        setIsEntitled(false);
+        setIsEntitlementLoading(false);
+        return;
+      }
+      const res = await fetch(`${API_BASE}/api/ai/entitlement`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        setIsEntitled(false);
+        setIsEntitlementLoading(false);
+        return;
+      }
+      const result = await res.json();
+      setIsEntitled(Boolean(result.entitled));
+      setIsEntitlementLoading(false);
+    };
+    fetchEntitlement();
+  }, [user]);
 
   const verifyPaymentAndRunAI = async (sessionId, videoPath) => {
     setAiLoading(true);
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      alert("ログインしてください");
+      setAiLoading(false);
+      return;
+    }
     // バックエンドで session_id を検証してから AIを実行
     const res = await fetch(`${API_BASE}/api/analyze/ai-paid`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify({
         session_id: sessionId,
         video_path: videoPath,
       }),
     });
 
-    const data = await res.json();
-    if (data.advice) {
-      setAiResult(data.advice);
+    const result = await res.json();
+    if (result.advice) {
+      setAiResult(result.advice);
+      setIsEntitled(true);
       // URLを綺麗にする（オプション）
       window.history.replaceState(null, "", window.location.pathname);
     } else {
       alert("支払いの検証に失敗しました");
+    }
+    setAiLoading(false);
+  };
+
+  const handleEntitledAI = async () => {
+    if (!videoURL) return;
+    setAiLoading(true);
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      alert("ログインしてください");
+      setAiLoading(false);
+      return;
+    }
+    const res = await fetch(`${API_BASE}/api/analyze/ai-entitled`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        video_path: videoURL.replace(API_BASE, ""),
+      }),
+    });
+    const result = await res.json();
+    if (result.advice) {
+      setAiResult(result.advice);
+    } else {
+      alert("AIアドバイスの取得に失敗しました");
     }
     setAiLoading(false);
   };
@@ -132,15 +201,31 @@ function App() {
   ===================== */
   const handlePurchaseAI = async () => {
     if (!videoURL) return;
+    if (!user) {
+      alert("AIアドバイスの購入にはログインが必要です");
+      return;
+    }
+    if (isEntitled) {
+      await handleEntitledAI();
+      return;
+    }
     setIsCheckingOut(true);
 
     try {
-      const stripe = await stripePromise;
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) {
+        alert("ログインしてください");
+        return;
+      }
 
       // 1. バックエンドでCheckout Sessionを作成
       const res = await fetch(`${API_BASE}/api/create-checkout-session`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           // 戻ってきた時に動画を表示できるようにパスを送る
           video_path: videoURL.replace(API_BASE, ""),
@@ -148,6 +233,11 @@ function App() {
       });
 
       const session = await res.json();
+      if (session.already_paid) {
+        setIsEntitled(true);
+        await handleEntitledAI();
+        return;
+      }
 
       // 2. Stripe決済画面へリダイレクト
       if (!session.url) {
@@ -155,10 +245,6 @@ function App() {
       }
 
       window.location.href = session.url;
-
-      if (result.error) {
-        alert(result.error.message);
-      }
     } catch (err) {
       console.error(err);
       alert("決済の開始に失敗しました");
@@ -247,14 +333,24 @@ function App() {
           {/* 👇 有料化ボタンに変更 */}
           {!aiResult && (
             <button
-              onClick={handlePurchaseAI}
-              disabled={isCheckingOut || aiLoading}
+              onClick={isEntitled ? handleEntitledAI : handlePurchaseAI}
+              disabled={
+                isCheckingOut || aiLoading || !user || isEntitlementLoading
+              }
               style={{
                 ...styles.primaryButton,
                 background: "linear-gradient(90deg, #6366f1, #4f46e5)", // Stripeっぽい色へ
+                cursor:
+                  !user || isEntitlementLoading ? "not-allowed" : "pointer",
               }}
             >
-              {isCheckingOut
+              {!user
+                ? "🔒 AIアドバイスの利用にはログイン後にサブスクリプションが必要です"
+                : isEntitlementLoading
+                ? "ユーザ確認中..."
+                : isEntitled
+                ? "🤖 AIコーチのアドバイスを見る"
+                : isCheckingOut
                 ? "Stripeへ移動中..."
                 : "💎 AIコーチのアドバイスを購入 (¥500)"}
             </button>
@@ -263,7 +359,7 @@ function App() {
           {/* 解析中ローディング表示 */}
           {aiLoading && (
             <p style={{ textAlign: "center", marginTop: 10 }}>
-              お支払い確認中... AIが解析しています...
+              AIが解析しています...
             </p>
           )}
 
