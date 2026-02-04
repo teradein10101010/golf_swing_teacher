@@ -1,47 +1,167 @@
 import { useRef, useState, useEffect } from "react";
+import { supabase } from "../lib/supabase";
 
-const API_BASE = "http://localhost:8000";
+/* =====================
+   環境変数（Vite）
+===================== */
+const API_BASE = import.meta.env.VITE_API_BASE;
 
-function App() {
+function App({ user }) {
   const videoRef = useRef(null);
 
+  // ... (既存のStateはそのまま)
   const [selectedFile, setSelectedFile] = useState(null);
   const [originalVideoURL, setOriginalVideoURL] = useState(null);
-
   const [videoURL, setVideoURL] = useState(null);
   const [events, setEvents] = useState(null);
   const [fps, setFps] = useState(30);
-
   const [progress, setProgress] = useState(0);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
+  const [isEntitled, setIsEntitled] = useState(false);
+  const [isEntitlementLoading, setIsEntitlementLoading] = useState(false);
+
+  // ★ 新規: 決済処理中のローディング
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
 
   /* =====================
-     ファイル選択
+     ★ 新規: Stripeからの戻り処理 (初期化時)
   ===================== */
+  useEffect(() => {
+    // URLクエリパラメータを確認
+    const query = new URLSearchParams(window.location.search);
+    const sessionId = query.get("session_id");
+    const videoPathParams = query.get("video_path"); // 復元用
+
+    if (sessionId && videoPathParams) {
+      if (!user) {
+        alert("AIアドバイスの利用にはログインが必要です");
+        return;
+      }
+      // 支払い成功として戻ってきた場合
+      setVideoURL(API_BASE + videoPathParams);
+      // ここで本来はjob_id等を使ってeventsデータも再取得するのがベスト
+      // 簡易的にAI解析を即実行する
+      verifyPaymentAndRunAI(sessionId, videoPathParams);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    const fetchEntitlement = async () => {
+      if (!user) {
+        setIsEntitled(false);
+        setIsEntitlementLoading(false);
+        return;
+      }
+      setIsEntitlementLoading(true);
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) {
+        setIsEntitled(false);
+        setIsEntitlementLoading(false);
+        return;
+      }
+      const res = await fetch(`${API_BASE}/api/ai/entitlement`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        setIsEntitled(false);
+        setIsEntitlementLoading(false);
+        return;
+      }
+      const result = await res.json();
+      setIsEntitled(Boolean(result.entitled));
+      setIsEntitlementLoading(false);
+    };
+    fetchEntitlement();
+  }, [user]);
+
+  const verifyPaymentAndRunAI = async (sessionId, videoPath) => {
+    setAiLoading(true);
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      alert("ログインしてください");
+      setAiLoading(false);
+      return;
+    }
+    // バックエンドで session_id を検証してから AIを実行
+    const res = await fetch(`${API_BASE}/api/analyze/ai-paid`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        video_path: videoPath,
+      }),
+    });
+
+    const result = await res.json();
+    if (result.advice) {
+      setAiResult(result.advice);
+      setIsEntitled(true);
+      // URLを綺麗にする（オプション）
+      window.history.replaceState(null, "", window.location.pathname);
+    } else {
+      alert("支払いの検証に失敗しました");
+    }
+    setAiLoading(false);
+  };
+
+  const handleEntitledAI = async () => {
+    if (!videoURL) return;
+    setAiLoading(true);
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) {
+      alert("ログインしてください");
+      setAiLoading(false);
+      return;
+    }
+    const res = await fetch(`${API_BASE}/api/analyze/ai-entitled`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        video_path: videoURL.replace(API_BASE, ""),
+      }),
+    });
+    const result = await res.json();
+    if (result.advice) {
+      setAiResult(result.advice);
+    } else {
+      alert("AIアドバイスの取得に失敗しました");
+    }
+    setAiLoading(false);
+  };
+
+  /* =====================
+     ファイル選択・解析開始・ジャンプ
+  ===================== */
+  // ... (handleFileSelect, handleAnalyze, jump は既存のまま)
   const handleFileSelect = (file) => {
     if (!file) return;
 
     setSelectedFile(file);
-    setOriginalVideoURL(URL.createObjectURL(file));
 
-    // リセット
+    const localURL = URL.createObjectURL(file);
+    setOriginalVideoURL(localURL);
+    // 前回結果をリセット
     setVideoURL(null);
     setEvents(null);
     setAiResult(null);
   };
 
-  /* =====================
-     解析開始
-  ===================== */
   const handleAnalyze = async () => {
     if (!selectedFile) return;
 
     setIsAnalyzing(true);
     setProgress(0);
-    setAiResult(null);
 
     const form = new FormData();
     form.append("video", selectedFile);
@@ -70,9 +190,6 @@ function App() {
     };
   };
 
-  /* =====================
-     フレームジャンプ
-  ===================== */
   const jump = (frame) => {
     if (!videoRef.current) return;
     videoRef.current.pause();
@@ -80,28 +197,63 @@ function App() {
   };
 
   /* =====================
-     AIコーチ
+     ★ 変更: AIコーチ (支払いフローへ)
   ===================== */
-  const handleAskAI = async () => {
+  const handlePurchaseAI = async () => {
     if (!videoURL) return;
+    if (!user) {
+      alert("AIアドバイスの購入にはログインが必要です");
+      return;
+    }
+    if (isEntitled) {
+      await handleEntitledAI();
+      return;
+    }
+    setIsCheckingOut(true);
 
-    setAiLoading(true);
-    setAiResult(null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) {
+        alert("ログインしてください");
+        return;
+      }
 
-    const res = await fetch(`${API_BASE}/api/analyze/ai`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        video_path: videoURL.replace(API_BASE, ""),
-      }),
-    });
+      // 1. バックエンドでCheckout Sessionを作成
+      const res = await fetch(`${API_BASE}/api/create-checkout-session`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          // 戻ってきた時に動画を表示できるようにパスを送る
+          video_path: videoURL.replace(API_BASE, ""),
+        }),
+      });
 
-    const data = await res.json();
-    setAiResult(data.advice);
-    setAiLoading(false);
+      const session = await res.json();
+      if (session.already_paid) {
+        setIsEntitled(true);
+        await handleEntitledAI();
+        return;
+      }
+
+      // 2. Stripe決済画面へリダイレクト
+      if (!session.url) {
+        throw new Error("Checkout URL not returned from backend");
+      }
+
+      window.location.href = session.url;
+    } catch (err) {
+      console.error(err);
+      alert("決済の開始に失敗しました");
+    } finally {
+      setIsCheckingOut(false);
+    }
   };
 
-  /* =====================
+  /* =====================checkoutUrl
      Render
   ===================== */
   return (
@@ -133,7 +285,10 @@ function App() {
           disabled={!selectedFile}
           style={{
             ...styles.primaryButton,
-            opacity: selectedFile ? 1 : 0.5,
+            background: selectedFile
+              ? "linear-gradient(90deg,#22c55e,#16a34a)"
+              : "#64748b",
+            cursor: selectedFile ? "pointer" : "not-allowed",
           }}
         >
           解析する
@@ -156,27 +311,57 @@ function App() {
       )}
 
       {/* Result */}
-      {videoURL && events && (
+      {/* ★ videoURLがあれば表示するように条件を少し緩和
+          (リロード後はeventsがないかもしれないため、eventsがある場合のみボタンを出すなどの調整が必要)
+      */}
+      {videoURL && (
         <div style={styles.card}>
           <h3 style={styles.sectionTitle}>📊 解析結果</h3>
 
-          <div style={styles.jumpButtons}>
-            <JumpButton label="Start" onClick={() => jump(events.start)} />
-            <JumpButton label="Top" onClick={() => jump(events.top)} />
-            <JumpButton label="Impact" onClick={() => jump(events.impact)} />
-            <JumpButton label="Finish" onClick={() => jump(events.finish)} />
-          </div>
+          {/* eventsがある場合のみジャンプボタン表示 */}
+          {events && (
+            <div style={styles.jumpButtons}>
+              <JumpButton label="Start" onClick={() => jump(events.start)} />
+              <JumpButton label="Top" onClick={() => jump(events.top)} />
+              <JumpButton label="Impact" onClick={() => jump(events.impact)} />
+              <JumpButton label="Finish" onClick={() => jump(events.finish)} />
+            </div>
+          )}
 
           <video ref={videoRef} src={videoURL} controls style={styles.video} />
 
-          {/* 👇 HUD動画生成後にだけ表示 */}
-          <button
-            onClick={handleAskAI}
-            disabled={aiLoading}
-            style={styles.primaryButton}
-          >
-            {aiLoading ? "AI解析中..." : "🤖 AIコーチに聞く"}
-          </button>
+          {/* 👇 有料化ボタンに変更 */}
+          {!aiResult && (
+            <button
+              onClick={isEntitled ? handleEntitledAI : handlePurchaseAI}
+              disabled={
+                isCheckingOut || aiLoading || !user || isEntitlementLoading
+              }
+              style={{
+                ...styles.primaryButton,
+                background: "linear-gradient(90deg, #6366f1, #4f46e5)", // Stripeっぽい色へ
+                cursor:
+                  !user || isEntitlementLoading ? "not-allowed" : "pointer",
+              }}
+            >
+              {!user
+                ? "🔒 AIアドバイスの利用にはログイン後にサブスクリプションが必要です"
+                : isEntitlementLoading
+                ? "ユーザ確認中..."
+                : isEntitled
+                ? "🤖 AIコーチのアドバイスを見る"
+                : isCheckingOut
+                ? "Stripeへ移動中..."
+                : "💎 AIコーチのアドバイスを購入 (¥500)"}
+            </button>
+          )}
+
+          {/* 解析中ローディング表示 */}
+          {aiLoading && (
+            <p style={{ textAlign: "center", marginTop: 10 }}>
+              AIが解析しています...
+            </p>
+          )}
 
           {aiResult && (
             <div style={styles.aiBox}>
@@ -237,7 +422,6 @@ const styles = {
     padding: "12px 0",
     borderRadius: 12,
     border: "none",
-    background: "linear-gradient(90deg,#22c55e,#16a34a)",
     color: "#fff",
     fontSize: 16,
     cursor: "pointer",
@@ -285,6 +469,12 @@ const styles = {
     padding: 16,
     borderRadius: 12,
     whiteSpace: "pre-wrap",
+  },
+  payNote: {
+    marginTop: 8,
+    fontSize: 12,
+    color: "#fbbf24",
+    textAlign: "center",
   },
 };
 
