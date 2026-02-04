@@ -2,12 +2,10 @@ import asyncio
 import json
 import tempfile
 import uuid
-from pathlib import Path
 
 from fastapi import APIRouter, File, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
 
 from app.core.config import DATA_DIR, VIDEOS_DIR
 from app.core.progress import progress_store
@@ -173,14 +171,3 @@ async def analyze_progress(job_id: str):
         event_generator(),
         media_type="text/event-stream",
     )
-
-
-class AIRequest(BaseModel):
-    video_path: str
-
-
-@router.post("/ai")
-def analyze_ai(req: AIRequest):
-    video_path = VIDEOS_DIR / Path(req.video_path).name
-    advice = analyzer.analyze_video(video_path)
-    return {"advice": advice}
