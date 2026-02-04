@@ -9,6 +9,11 @@ import numpy as np
 import pandas as pd
 from google import genai
 
+try:
+    from google.api_core import exceptions as google_exceptions
+except Exception:  # pragma: no cover - optional dependency in some envs
+    google_exceptions = None
+
 VISIBLE_POINTS = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 POSE_CONNECTIONS = [
     (11, 13),
@@ -394,5 +399,7 @@ class SwingAnalyzer:
             )
 
             return response.text
-        except errors.ServerError as e:
-            return "ただいま混雑しています。しばらく経ってから再度お試しください。"
+        except Exception as e:
+            if google_exceptions and isinstance(e, google_exceptions.GoogleAPIError):
+                return "ただいま混雑しています。しばらく経ってから再度お試しください。"
+            raise
