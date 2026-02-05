@@ -365,8 +365,10 @@ function App({ user }) {
 
           {aiResult && (
             <div style={styles.aiBox}>
-              <h4>🤖 AIコーチのアドバイス</h4>
-              <p>{aiResult}</p>
+              <div style={styles.aiHeader}>
+                <h4 style={styles.aiTitle}>🤖 AIコーチのアドバイス</h4>
+              </div>
+              <div style={styles.aiContent}>{renderAiAdvice(aiResult)}</div>
             </div>
           )}
         </div>
@@ -374,6 +376,78 @@ function App({ user }) {
     </div>
   );
 }
+
+const renderInline = (text) => {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g).filter(Boolean);
+  return parts.map((part, index) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      const content = part.slice(2, -2);
+      return (
+        <strong key={`b-${index}`} style={styles.aiStrong}>
+          {content}
+        </strong>
+      );
+    }
+    return <span key={`t-${index}`}>{part}</span>;
+  });
+};
+
+const renderAiAdvice = (text) => {
+  const lines = text.split("\n");
+  const elements = [];
+  let listItems = [];
+
+  const flushList = (keyBase) => {
+    if (!listItems.length) return;
+    elements.push(
+      <ol key={`list-${keyBase}`} style={styles.aiList}>
+        {listItems.map((item, index) => (
+          <li key={`li-${keyBase}-${index}`} style={styles.aiListItem}>
+            {renderInline(item)}
+          </li>
+        ))}
+      </ol>,
+    );
+    listItems = [];
+  };
+
+  lines.forEach((rawLine, index) => {
+    const line = rawLine.trim();
+    if (!line) {
+      flushList(index);
+      elements.push(<div key={`sp-${index}`} style={styles.aiSpacer} />);
+      return;
+    }
+    if (line === "---" || line === "—" || line === "***") {
+      flushList(index);
+      elements.push(<hr key={`hr-${index}`} style={styles.aiDivider} />);
+      return;
+    }
+    if (line.startsWith("###")) {
+      flushList(index);
+      elements.push(
+        <h5 key={`h-${index}`} style={styles.aiHeading}>
+          {renderInline(line.replace(/^###\s*/, ""))}
+        </h5>,
+      );
+      return;
+    }
+    const ordered = line.match(/^(\d+)[\.\)]\s+/);
+    if (ordered) {
+      listItems.push(line.replace(/^(\d+)[\.\)]\s+/, ""));
+      return;
+    }
+    flushList(index);
+    elements.push(
+      <p key={`p-${index}`} style={styles.aiParagraph}>
+        {renderInline(line)}
+      </p>,
+    );
+  });
+
+  flushList("end");
+  return elements;
+};
 
 /* =====================
    Components
@@ -465,10 +539,54 @@ const styles = {
   },
   aiBox: {
     marginTop: 20,
-    background: "#020617",
-    padding: 16,
-    borderRadius: 12,
-    whiteSpace: "pre-wrap",
+    background: "linear-gradient(180deg,#0b1220 0%, #0a0f1c 100%)",
+    padding: 18,
+    borderRadius: 14,
+    border: "1px solid #1f2937",
+    boxShadow: "0 10px 30px rgba(2,6,23,0.35)",
+  },
+  aiHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 12,
+  },
+  aiTitle: {
+    margin: 0,
+    fontSize: 18,
+    letterSpacing: 0.2,
+  },
+  aiContent: {
+    color: "#e2e8f0",
+    fontSize: 15,
+    lineHeight: 1.85,
+    letterSpacing: 0.2,
+  },
+  aiParagraph: {
+    margin: "0 0 10px",
+  },
+  aiHeading: {
+    margin: "6px 0 8px",
+    fontSize: 16,
+    color: "#f8fafc",
+  },
+  aiList: {
+    margin: "0 0 10px 20px",
+    padding: 0,
+  },
+  aiListItem: {
+    marginBottom: 6,
+  },
+  aiDivider: {
+    border: "none",
+    borderTop: "1px solid #1f2937",
+    margin: "12px 0",
+  },
+  aiSpacer: {
+    height: 6,
+  },
+  aiStrong: {
+    color: "#f8fafc",
   },
   payNote: {
     marginTop: 8,
