@@ -30,14 +30,6 @@ POSE_CONNECTIONS = [
     (23, 24),
 ]
 
-EVENT_COLORS = {
-    "start": (255, 255, 0),
-    "top": (255, 0, 0),
-    "impact": (0, 0, 255),
-    "finish": (0, 255, 255),
-    None: (0, 255, 0),
-}
-
 
 class SwingAnalyzer:
     def __init__(self):
@@ -313,12 +305,8 @@ class SwingAnalyzer:
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 res = pose.process(rgb)
 
-                # ===== イベント判定（絶対フレームで比較） =====
-                event = None
-                color = EVENT_COLORS[event]
-
                 if res.pose_landmarks:
-                    self.draw_pose(frame, res.pose_landmarks.landmark, color)
+                    self.draw_pose(frame, res.pose_landmarks.landmark, (0, 255, 0))
 
                 out.write(frame)
 
