@@ -6,7 +6,10 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError, jwk
 from jose.utils import base64url_decode
 
+from app.core.config import FREE_ACCESS
+
 security = HTTPBearer()
+security_optional = HTTPBearer(auto_error=False)
 
 JWKS_CACHE = {"keys": None, "fetched_at": 0}
 JWKS_TTL_SEC = 60 * 60
@@ -92,3 +95,13 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="Invalid token")
 
     return claims  # user_id, email などが入っている
+
+
+def get_current_user_optional(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_optional),
+):
+    if credentials is None:
+        if FREE_ACCESS:
+            return None
+        raise HTTPException(status_code=401, detail="Missing token")
+    return get_current_user(credentials)

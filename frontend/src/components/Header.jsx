@@ -1,5 +1,8 @@
 import { Link, useLocation } from "react-router-dom";
 import Auth from "./Auth";
+import { FREE_ACCESS, SUPABASE_CONFIGURED } from "../lib/supabase";
+
+const FREE_ACCESS_EFFECTIVE = FREE_ACCESS || !SUPABASE_CONFIGURED;
 
 export default function Header({ user, onUserChange }) {
   const location = useLocation();
@@ -32,7 +35,7 @@ export default function Header({ user, onUserChange }) {
       </nav>
 
       {/* Auth */}
-      <Auth onUserChange={onUserChange} />
+      {!FREE_ACCESS_EFFECTIVE && <Auth onUserChange={onUserChange} />}
     </header>
   );
 }

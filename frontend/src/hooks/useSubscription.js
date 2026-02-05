@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
-import { supabase } from "../lib/supabase";
+import { FREE_ACCESS, SUPABASE_CONFIGURED, supabase } from "../lib/supabase";
+
+const FREE_ACCESS_EFFECTIVE = FREE_ACCESS || !SUPABASE_CONFIGURED;
 
 export function useSubscription(user) {
   const [subscription, setSubscription] = useState(null);
 
   useEffect(() => {
+    if (FREE_ACCESS_EFFECTIVE) return;
     if (!user) return;
 
     supabase

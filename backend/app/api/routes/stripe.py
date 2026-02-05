@@ -10,8 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.core.auth import get_current_user
-from app.core.config import DATA_DIR, VIDEOS_DIR
+from app.core.auth import get_current_user, get_current_user_optional
+from app.core.config import DATA_DIR, FREE_ACCESS, VIDEOS_DIR
 from app.services.swing_analyzer import SwingAnalyzer
 from supabase_client import supabase
 
@@ -31,6 +31,8 @@ class AIRequest(BaseModel):
 
 
 def _is_entitled(user_id: str) -> bool:
+    if FREE_ACCESS:
+        return True
     try:
         res = (
             supabase.table("ai_entitlements")
@@ -45,6 +47,8 @@ def _is_entitled(user_id: str) -> bool:
 
 
 def _grant_entitlement(user_id: str) -> None:
+    if FREE_ACCESS:
+        return
     supabase.table("ai_entitlements").upsert(
         {
             "user_id": user_id,
@@ -66,8 +70,14 @@ def _csv_for_video(video_file_path: Path) -> Path | None:
 
 
 @router.post("/create-checkout-session")
-async def create_checkout_session(request: Request, user=Depends(get_current_user)):
+async def create_checkout_session(
+    request: Request, user=Depends(get_current_user_optional)
+):
     try:
+        if FREE_ACCESS:
+            return {"already_paid": True}
+        if not user:
+            raise HTTPException(status_code=401, detail="Authentication required")
         data = await request.json()
         video_path = data.get("video_path", "")
         if not video_path:
@@ -122,24 +132,31 @@ async def create_checkout_session(request: Request, user=Depends(get_current_use
 
 
 @router.post("/analyze/ai-paid")
-async def analyze_ai_paid(request: Request, user=Depends(get_current_user)):
+async def analyze_ai_paid(request: Request, user=Depends(get_current_user_optional)):
     data = await request.json()
     session_id = data.get("session_id")
     video_url_path = data.get("video_path")
 
-    try:
-        session = stripe.checkout.Session.retrieve(session_id)
-        if session.payment_status != "paid":
+    if not FREE_ACCESS:
+        if not user:
             return JSONResponse(
-                status_code=403, content={"error": "支払いが完了していません"}
+                status_code=401, content={"error": "Authentication required"}
             )
-        if session.client_reference_id != user["sub"]:
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+            if session.payment_status != "paid":
+                return JSONResponse(
+                    status_code=403, content={"error": "支払いが完了していません"}
+                )
+            if session.client_reference_id != user["sub"]:
+                return JSONResponse(
+                    status_code=403,
+                    content={"error": "この決済は現在のユーザーに紐づいていません"},
+                )
+        except Exception:
             return JSONResponse(
-                status_code=403,
-                content={"error": "この決済は現在のユーザーに紐づいていません"},
+                status_code=400, content={"error": "無効なセッションです"}
             )
-    except Exception:
-        return JSONResponse(status_code=400, content={"error": "無効なセッションです"})
 
     if not video_url_path:
         raise HTTPException(status_code=400, detail="video_path is required")
@@ -154,20 +171,28 @@ async def analyze_ai_paid(request: Request, user=Depends(get_current_user)):
 
     csv_path = _csv_for_video(video_file_path)
     advice_text = analyzer.analyze_video(video_file_path, csv_path=csv_path)
-    _grant_entitlement(user["sub"])
+    if user:
+        _grant_entitlement(user["sub"])
 
     return {"advice": advice_text}
 
 
 @router.get("/ai/entitlement")
-def ai_entitlement(user=Depends(get_current_user)):
-    return {"entitled": _is_entitled(user["sub"])}
+def ai_entitlement(user=Depends(get_current_user_optional)):
+    if FREE_ACCESS:
+        return {"entitled": True, "free_access": True}
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return {"entitled": _is_entitled(user["sub"]), "free_access": False}
 
 
 @router.post("/analyze/ai-entitled")
-def analyze_ai_entitled(req: AIRequest, user=Depends(get_current_user)):
-    if not _is_entitled(user["sub"]):
-        raise HTTPException(status_code=403, detail="Not entitled")
+def analyze_ai_entitled(req: AIRequest, user=Depends(get_current_user_optional)):
+    if not FREE_ACCESS:
+        if not user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if not _is_entitled(user["sub"]):
+            raise HTTPException(status_code=403, detail="Not entitled")
     video_path = VIDEOS_DIR / Path(req.video_path).name
     csv_path = _csv_for_video(video_path)
     advice = analyzer.analyze_video(video_path, csv_path=csv_path)
@@ -176,4 +201,9 @@ def analyze_ai_entitled(req: AIRequest, user=Depends(get_current_user)):
 
 @router.post("/analyze/ai")
 def analyze_ai(_: AIRequest):
+    if FREE_ACCESS:
+        raise HTTPException(
+            status_code=400,
+            detail="FREE_ACCESS is enabled; use /api/analyze/ai-entitled",
+        )
     raise HTTPException(status_code=403, detail="AIアドバイスは有料機能です")
