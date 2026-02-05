@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.core.auth import get_current_user
-from app.core.config import VIDEOS_DIR
+from app.core.config import DATA_DIR, VIDEOS_DIR
 from app.services.swing_analyzer import SwingAnalyzer
 from supabase_client import supabase
 
@@ -52,6 +52,17 @@ def _grant_entitlement(user_id: str) -> None:
         },
         on_conflict="user_id",
     ).execute()
+
+
+def _csv_for_video(video_file_path: Path) -> Path | None:
+    stem = video_file_path.stem
+    if stem.startswith("hud_"):
+        job_id = stem[len("hud_") :]
+    elif stem.startswith("src_"):
+        job_id = stem[len("src_") :]
+    else:
+        return None
+    return DATA_DIR / f"data_{job_id}.csv"
 
 
 @router.post("/create-checkout-session")
@@ -141,7 +152,8 @@ async def analyze_ai_paid(request: Request, user=Depends(get_current_user)):
             status_code=404, detail=f"Video file not found: {video_file_path}"
         )
 
-    advice_text = analyzer.analyze_video(video_file_path)
+    csv_path = _csv_for_video(video_file_path)
+    advice_text = analyzer.analyze_video(video_file_path, csv_path=csv_path)
     _grant_entitlement(user["sub"])
 
     return {"advice": advice_text}
@@ -157,7 +169,8 @@ def analyze_ai_entitled(req: AIRequest, user=Depends(get_current_user)):
     if not _is_entitled(user["sub"]):
         raise HTTPException(status_code=403, detail="Not entitled")
     video_path = VIDEOS_DIR / Path(req.video_path).name
-    advice = analyzer.analyze_video(video_path)
+    csv_path = _csv_for_video(video_path)
+    advice = analyzer.analyze_video(video_path, csv_path=csv_path)
     return {"advice": advice}
 
 

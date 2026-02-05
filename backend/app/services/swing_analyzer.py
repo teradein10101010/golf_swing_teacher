@@ -56,6 +56,7 @@ class SwingAnalyzer:
     # =========================
     def extract_metrics(self, video_path):
         cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         data, idx = [], 0
 
         with self.mp_pose.Pose() as pose:
@@ -82,27 +83,106 @@ class SwingAnalyzer:
                 el = self.calc_angle(
                     (lm[13].x, lm[13].y), (lm[11].x, lm[11].y), (lm[23].x, lm[23].y)
                 )
+                el_r = self.calc_angle(
+                    (lm[14].x, lm[14].y), (lm[12].x, lm[12].y), (lm[24].x, lm[24].y)
+                )
+                knee_l = self.calc_angle(
+                    (lm[23].x, lm[23].y), (lm[25].x, lm[25].y), (lm[27].x, lm[27].y)
+                )
+                knee_r = self.calc_angle(
+                    (lm[24].x, lm[24].y), (lm[26].x, lm[26].y), (lm[28].x, lm[28].y)
+                )
 
                 wx, wy = lm[16].x, lm[16].y
                 cx, cy = (lm[15].x + lm[16].x) / 2, (lm[15].y + lm[16].y) / 2
+                sh_mid_x, sh_mid_y = (lm[11].x + lm[12].x) / 2, (
+                    lm[11].y + lm[12].y
+                ) / 2
+                hip_mid_x, hip_mid_y = (lm[23].x + lm[24].x) / 2, (
+                    lm[23].y + lm[24].y
+                ) / 2
 
-                data.append([idx, sh, hip, el, wx, wy, cx, cy])
+                sh_vec_x, sh_vec_y = lm[12].x - lm[11].x, lm[12].y - lm[11].y
+                hip_vec_x, hip_vec_y = lm[24].x - lm[23].x, lm[24].y - lm[23].y
+                shoulder_line_angle = np.degrees(np.arctan2(sh_vec_y, sh_vec_x))
+                hip_line_angle = np.degrees(np.arctan2(hip_vec_y, hip_vec_x))
+
+                spine_vec_x = sh_mid_x - hip_mid_x
+                spine_vec_y = sh_mid_y - hip_mid_y
+                spine_angle = np.degrees(np.arctan2(spine_vec_x, -spine_vec_y))
+
+                separation = shoulder_line_angle - hip_line_angle
+
+                data.append(
+                    [
+                        idx,
+                        sh,
+                        hip,
+                        el,
+                        el_r,
+                        knee_l,
+                        knee_r,
+                        shoulder_line_angle,
+                        hip_line_angle,
+                        spine_angle,
+                        separation,
+                        wx,
+                        wy,
+                        cx,
+                        cy,
+                        sh_mid_x,
+                        sh_mid_y,
+                        hip_mid_x,
+                        hip_mid_y,
+                    ]
+                )
                 idx += 1
 
         cap.release()
-        return pd.DataFrame(
+        df = pd.DataFrame(
             data,
             columns=[
                 "frame",
                 "shoulder_angle",
                 "hip_angle",
                 "elbow_angle",
+                "elbow_angle_r",
+                "knee_angle_l",
+                "knee_angle_r",
+                "shoulder_line_angle",
+                "hip_line_angle",
+                "spine_angle",
+                "shoulder_hip_separation",
                 "wrist_x",
                 "wrist_y",
                 "club_x",
                 "club_y",
+                "shoulder_mid_x",
+                "shoulder_mid_y",
+                "hip_mid_x",
+                "hip_mid_y",
             ],
         )
+
+        # 速度・加速度（1秒あたり）
+        df["wrist_vx"] = df["wrist_x"].diff().fillna(0) * fps
+        df["wrist_vy"] = df["wrist_y"].diff().fillna(0) * fps
+        df["wrist_speed"] = np.hypot(df["wrist_vx"], df["wrist_vy"])
+        df["wrist_accel"] = df["wrist_speed"].diff().fillna(0) * fps
+
+        df["club_vx"] = df["club_x"].diff().fillna(0) * fps
+        df["club_vy"] = df["club_y"].diff().fillna(0) * fps
+        df["club_speed"] = np.hypot(df["club_vx"], df["club_vy"])
+        df["club_accel"] = df["club_speed"].diff().fillna(0) * fps
+
+        # 角速度（deg/s）
+        df["shoulder_ang_vel"] = df["shoulder_angle"].diff().fillna(0) * fps
+        df["hip_ang_vel"] = df["hip_angle"].diff().fillna(0) * fps
+        df["elbow_ang_vel"] = df["elbow_angle"].diff().fillna(0) * fps
+        df["elbow_ang_vel_r"] = df["elbow_angle_r"].diff().fillna(0) * fps
+        df["spine_ang_vel"] = df["spine_angle"].diff().fillna(0) * fps
+
+        return df
 
     # =========================
     # スイングイベント検出
@@ -351,13 +431,23 @@ class SwingAnalyzer:
             "Finish": e - start_idx,
         }, fps
 
-    def analyze_video(self, video_path: Path) -> str:
+    def analyze_video(self, video_path: Path, csv_path: Path | None = None) -> str:
         # 1. 動画アップロード
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY が設定されていません")
         self.client = genai.Client(api_key=api_key)
         video_file = self.client.files.upload(file=str(video_path))
+        csv_file = None
+        if csv_path and csv_path.exists():
+            # SDKによってはmime_type未対応のためフォールバック付きでアップロード
+            try:
+                csv_file = self.client.files.upload(
+                    file=str(csv_path),
+                    mime_type="text/plain",
+                )
+            except TypeError:
+                csv_file = self.client.files.upload(file=str(csv_path))
 
         # 2. 処理完了待ち
         while video_file.state.name == "PROCESSING":
@@ -369,21 +459,28 @@ class SwingAnalyzer:
 
         # 3. AIに質問
         try:
-            response = self.client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[
-                    video_file,
-                    """
-    あなたはプロゴルフコーチです。
-    このHUD付きスイング動画を見て以下を日本語で答えてください。
+            contents = [video_file]
+            if csv_file:
+                contents.append(csv_file)
+            contents.append(
+                """
+    あなたはプロゴルフコーチです。入力された動画・データは参考にして構いません。
+    ただし出力には、入力データの形式や内部項目が推定できる情報を一切含めないでください。
+    具体的には、フレーム番号、数値の引用、カラム名（例: elbow_angle など）、
+    HUD/CSV/解析データといった言及を禁止します。観察に基づく一般的な表現で述べてください。
 
+    以下を日本語で答えてください。
     1. このスイングの良い点
     2. 改善すべきポイント（最大3つ）
     3. それぞれに対する具体的な練習方法
 
     専門的だが初心者にも分かる説明にしてください。
-    """,
-                ],
+    """
+            )
+
+            response = self.client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents,
             )
 
             return response.text
