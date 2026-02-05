@@ -4,7 +4,10 @@ import { supabase } from "../lib/supabase";
 /* =====================
    環境変数（Vite）
 ===================== */
+import { FREE_ACCESS, SUPABASE_CONFIGURED } from "../lib/supabase";
+
 const API_BASE = import.meta.env.VITE_API_BASE;
+const FREE_ACCESS_EFFECTIVE = FREE_ACCESS || !SUPABASE_CONFIGURED;
 
 function App({ user }) {
   const videoRef = useRef(null);
@@ -22,6 +25,7 @@ function App({ user }) {
   const [isEntitled, setIsEntitled] = useState(false);
   const [isEntitlementLoading, setIsEntitlementLoading] = useState(false);
   const [entitlementError, setEntitlementError] = useState(null);
+  const [freeAccessServer, setFreeAccessServer] = useState(false);
 
   // ★ 新規: 決済処理中のローディング
   const [isCheckingOut, setIsCheckingOut] = useState(false);
@@ -36,7 +40,7 @@ function App({ user }) {
     const videoPathParams = query.get("video_path"); // 復元用
 
     if (sessionId && videoPathParams) {
-      if (!user) {
+      if (!user && !FREE_ACCESS_EFFECTIVE) {
         alert("AIアドバイスの利用にはログインが必要です");
         return;
       }
@@ -46,9 +50,31 @@ function App({ user }) {
       // 簡易的にAI解析を即実行する
       verifyPaymentAndRunAI(sessionId, videoPathParams);
     }
-  }, [user]);
+  }, [user, freeAccessServer]);
 
   const fetchEntitlement = useCallback(async () => {
+    // Server truth: if backend is in free mode, it returns free_access without auth
+    try {
+      const res = await fetch(`${API_BASE}/api/ai/entitlement`);
+      if (res.ok) {
+        const result = await res.json();
+        if (result.free_access) {
+          setFreeAccessServer(true);
+          setIsEntitled(true);
+          setIsEntitlementLoading(false);
+          setEntitlementError(null);
+          return;
+        }
+      }
+    } catch {
+      // ignore: fall back to env/user-based flow
+    }
+    if (FREE_ACCESS_EFFECTIVE || freeAccessServer) {
+      setIsEntitled(true);
+      setIsEntitlementLoading(false);
+      setEntitlementError(null);
+      return;
+    }
     if (!user) {
       setIsEntitled(false);
       setIsEntitlementLoading(false);
@@ -73,6 +99,7 @@ function App({ user }) {
       }
       const result = await res.json();
       setIsEntitled(Boolean(result.entitled));
+      setFreeAccessServer(Boolean(result.free_access));
     } catch (err) {
       console.error("fetchEntitlement failed", err);
       setIsEntitled(false);
@@ -87,6 +114,10 @@ function App({ user }) {
   }, [fetchEntitlement]);
 
   const verifyPaymentAndRunAI = async (sessionId, videoPath) => {
+    if (FREE_ACCESS_EFFECTIVE || freeAccessServer) {
+      await handleEntitledAI();
+      return;
+    }
     setAiLoading(true);
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
@@ -123,18 +154,21 @@ function App({ user }) {
   const handleEntitledAI = async () => {
     if (!videoURL) return;
     setAiLoading(true);
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) {
-      alert("ログインしてください");
-      setAiLoading(false);
-      return;
+    let token = null;
+    if (!FREE_ACCESS_EFFECTIVE && !freeAccessServer) {
+      const { data } = await supabase.auth.getSession();
+      token = data.session?.access_token;
+      if (!token) {
+        alert("ログインしてください");
+        setAiLoading(false);
+        return;
+      }
     }
     const res = await fetch(`${API_BASE}/api/analyze/ai-entitled`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
         video_path: videoURL.replace(API_BASE, ""),
@@ -210,6 +244,10 @@ function App({ user }) {
   ===================== */
   const handlePurchaseAI = async () => {
     if (!videoURL) return;
+    if (FREE_ACCESS_EFFECTIVE || freeAccessServer) {
+      await handleEntitledAI();
+      return;
+    }
     if (!user) {
       alert("AIアドバイスの購入にはログインが必要です");
       return;
@@ -350,7 +388,10 @@ function App({ user }) {
                   : handlePurchaseAI
               }
               disabled={
-                isCheckingOut || aiLoading || !user || isEntitlementLoading
+                isCheckingOut ||
+                aiLoading ||
+                (!FREE_ACCESS_EFFECTIVE && !freeAccessServer && !user) ||
+                isEntitlementLoading
               }
               style={{
                 ...styles.primaryButton,
@@ -361,14 +402,16 @@ function App({ user }) {
                     : "pointer",
               }}
             >
-              {!user
+              {!user && !FREE_ACCESS_EFFECTIVE && !freeAccessServer
                 ? "🔒 AIアドバイスの利用にはログイン後にサブスクリプションが必要です"
                 : entitlementError
                 ? "ユーザ確認に失敗しました（再試行）"
                 : isEntitlementLoading
                 ? "ユーザ確認中..."
                 : isEntitled
-                ? "🤖 AIコーチのアドバイスを見る"
+                ? FREE_ACCESS_EFFECTIVE || freeAccessServer
+                  ? "🤖 AIコーチのアドバイスを見る（無料）"
+                  : "🤖 AIコーチのアドバイスを見る"
                 : isCheckingOut
                 ? "Stripeへ移動中..."
                 : "💎 AIコーチのアドバイスを購入 (¥500)"}
