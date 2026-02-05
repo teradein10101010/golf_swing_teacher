@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 
 /* =====================
@@ -21,6 +21,7 @@ function App({ user }) {
   const [aiResult, setAiResult] = useState(null);
   const [isEntitled, setIsEntitled] = useState(false);
   const [isEntitlementLoading, setIsEntitlementLoading] = useState(false);
+  const [entitlementError, setEntitlementError] = useState(null);
 
   // ★ 新規: 決済処理中のローディング
   const [isCheckingOut, setIsCheckingOut] = useState(false);
@@ -47,19 +48,20 @@ function App({ user }) {
     }
   }, [user]);
 
-  useEffect(() => {
-    const fetchEntitlement = async () => {
-      if (!user) {
-        setIsEntitled(false);
-        setIsEntitlementLoading(false);
-        return;
-      }
-      setIsEntitlementLoading(true);
+  const fetchEntitlement = useCallback(async () => {
+    if (!user) {
+      setIsEntitled(false);
+      setIsEntitlementLoading(false);
+      setEntitlementError(null);
+      return;
+    }
+    setIsEntitlementLoading(true);
+    setEntitlementError(null);
+    try {
       const { data } = await supabase.auth.getSession();
       const token = data.session?.access_token;
       if (!token) {
         setIsEntitled(false);
-        setIsEntitlementLoading(false);
         return;
       }
       const res = await fetch(`${API_BASE}/api/ai/entitlement`, {
@@ -67,15 +69,22 @@ function App({ user }) {
       });
       if (!res.ok) {
         setIsEntitled(false);
-        setIsEntitlementLoading(false);
         return;
       }
       const result = await res.json();
       setIsEntitled(Boolean(result.entitled));
+    } catch (err) {
+      console.error("fetchEntitlement failed", err);
+      setIsEntitled(false);
+      setEntitlementError("ユーザ情報の確認に失敗しました");
+    } finally {
       setIsEntitlementLoading(false);
-    };
-    fetchEntitlement();
+    }
   }, [user]);
+
+  useEffect(() => {
+    fetchEntitlement();
+  }, [fetchEntitlement]);
 
   const verifyPaymentAndRunAI = async (sessionId, videoPath) => {
     setAiLoading(true);
@@ -333,7 +342,13 @@ function App({ user }) {
           {/* 👇 有料化ボタンに変更 */}
           {!aiResult && (
             <button
-              onClick={isEntitled ? handleEntitledAI : handlePurchaseAI}
+              onClick={
+                entitlementError
+                  ? fetchEntitlement
+                  : isEntitled
+                  ? handleEntitledAI
+                  : handlePurchaseAI
+              }
               disabled={
                 isCheckingOut || aiLoading || !user || isEntitlementLoading
               }
@@ -341,11 +356,15 @@ function App({ user }) {
                 ...styles.primaryButton,
                 background: "linear-gradient(90deg, #6366f1, #4f46e5)", // Stripeっぽい色へ
                 cursor:
-                  !user || isEntitlementLoading ? "not-allowed" : "pointer",
+                  !user || isEntitlementLoading || entitlementError
+                    ? "not-allowed"
+                    : "pointer",
               }}
             >
               {!user
                 ? "🔒 AIアドバイスの利用にはログイン後にサブスクリプションが必要です"
+                : entitlementError
+                ? "ユーザ確認に失敗しました（再試行）"
                 : isEntitlementLoading
                 ? "ユーザ確認中..."
                 : isEntitled
