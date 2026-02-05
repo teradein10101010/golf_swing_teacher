@@ -11,7 +11,8 @@ export default function SubscribeButton({ user }) {
     const session = await supabase.auth.getSession();
     const token = session.data.session.access_token;
 
-    const res = await fetch("http://localhost:8000/create-checkout-session", {
+    const apiBase = import.meta.env.VITE_API_BASE;
+    const res = await fetch(`${apiBase}/create-checkout-session`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,

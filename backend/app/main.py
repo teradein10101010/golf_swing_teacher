@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -9,9 +11,15 @@ from app.core.config import DATA_DIR, VIDEOS_DIR
 
 app = FastAPI()
 
+cors_origins = os.getenv("CORS_ORIGINS") or os.getenv("FRONTEND_ORIGIN")
+if cors_origins:
+    allow_origins = [o.strip() for o in cors_origins.split(",") if o.strip()]
+else:
+    allow_origins = ["http://localhost:5173"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
