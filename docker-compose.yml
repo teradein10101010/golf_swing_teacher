@@ -19,3 +19,4 @@ services:
       - VITE_FREE_ACCESS=1
     depends_on:
       - backend
+
