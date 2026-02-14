@@ -1,16 +1,18 @@
 services:
   backend:
-    build: .
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
     container_name: golf-backend
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app/backend
+      - ./apps/backend:/app/backend
     env_file:
-      - ./backend/.env
+      - ./apps/backend/.env
 
   frontend:
-    build: ./frontend
+    build: ./apps/frontend
     container_name: golf-frontend
     ports:
       - "5173:5173"
@@ -19,4 +21,3 @@ services:
       - VITE_FREE_ACCESS=1
     depends_on:
       - backend
-
