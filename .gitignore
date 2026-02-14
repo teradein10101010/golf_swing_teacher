@@ -5,3 +5,6 @@
 /data/*.mp4
 
 /data/*.mp4
+
+/backend/videos/*.mp4
+/backend/videos/*.raw.mp4
