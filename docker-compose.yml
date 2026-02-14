@@ -1,0 +1,22 @@
+services:
+  backend:
+    build: .
+    container_name: golf-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app/backend
+    env_file:
+      - ./backend/.env
+
+  frontend:
+    build: ./frontend
+    container_name: golf-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE=http://localhost:8000
+      - VITE_FREE_ACCESS=1
+    depends_on:
+      - backend
+

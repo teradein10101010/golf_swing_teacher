@@ -1,0 +1,14 @@
+numpy==2.2.6
+pandas==2.3.3
+matplotlib==3.10.8
+opencv-python-headless==4.12.0.88
+mediapipe==0.10.14
+fastapi
+uvicorn
+python-multipart
+google-genai>=0.3.0
+python-dotenv
+stripe
+python-jose
+httpx
+supabase
