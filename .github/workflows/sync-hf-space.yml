@@ -34,5 +34,19 @@ jobs:
             exit 1
           fi
 
+          SYNC_DIR="$(mktemp -d)"
+          rsync -a --delete ./ "$SYNC_DIR/" \
+            --exclude ".git/" \
+            --exclude ".github/" \
+            --exclude ".idea/" \
+            --exclude "data/*.mp4" \
+            --exclude "backend/videos/*.mp4" \
+            --exclude "backend/videos/*.raw.mp4"
+
+          cd "$SYNC_DIR"
+          git init
+          git checkout -b main
+          git add -A
+          git commit -m "Sync from GitHub main ${GITHUB_SHA}"
           git remote add hf "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/${HF_SPACE_REPO}"
           git push hf main:main --force
