@@ -226,6 +226,7 @@ function CompareAnalysis() {
                 ref={videoARef}
                 src={currentAURL}
                 controls
+                playsInline
                 style={styles.video}
               />
             )}
@@ -234,6 +235,7 @@ function CompareAnalysis() {
                 ref={videoBRef}
                 src={currentBURL}
                 controls
+                playsInline
                 style={styles.video}
               />
             )}

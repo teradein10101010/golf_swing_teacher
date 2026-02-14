@@ -323,7 +323,12 @@ function App({ user }) {
         {originalVideoURL && (
           <>
             <h3 style={styles.sectionTitle}>🎥 元動画</h3>
-            <video src={originalVideoURL} controls style={styles.video} />
+            <video
+              src={originalVideoURL}
+              controls
+              playsInline
+              style={styles.video}
+            />
           </>
         )}
 
@@ -375,7 +380,13 @@ function App({ user }) {
             </div>
           )}
 
-          <video ref={videoRef} src={videoURL} controls style={styles.video} />
+          <video
+            ref={videoRef}
+            src={videoURL}
+            controls
+            playsInline
+            style={styles.video}
+          />
 
           {/* 👇 有料化ボタンに変更 */}
           {!aiResult && (
