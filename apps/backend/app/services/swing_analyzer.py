@@ -243,6 +243,31 @@ class SwingAnalyzer:
             x2, y2 = int(lm[j].x * w), int(lm[j].y * h)
             cv2.line(frame, (x1, y1), (x2, y2), color, 4)
 
+    @staticmethod
+    def _transcode_for_mobile_compat(tmp_path: Path, out_path: Path):
+        # iOS Safari compatibility: H.264 baseline + yuv420p + faststart.
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(tmp_path),
+                "-an",
+                "-vf",
+                "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p",
+                "-c:v",
+                "libx264",
+                "-profile:v",
+                "baseline",
+                "-level",
+                "3.1",
+                "-movflags",
+                "+faststart",
+                str(out_path),
+            ],
+            check=True,
+        )
+
     def export_with_frame_index(self, video_path, out_path, progress_cb=None):
 
         out_path = Path(out_path)
@@ -295,22 +320,7 @@ class SwingAnalyzer:
         out.release()
 
         # ブラウザ再生向けに再エンコード
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(tmp_path),
-                "-vcodec",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
-                str(out_path),
-            ],
-            check=True,
-        )
+        self._transcode_for_mobile_compat(tmp_path, out_path)
 
         tmp_path.unlink()
 
@@ -402,22 +412,7 @@ class SwingAnalyzer:
         if progress_cb:
             progress_cb(85)
 
-        subprocess.run(
-            [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(tmp_path),
-                "-vcodec",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
-                str(out_path),
-            ],
-            check=True,
-        )
+        self._transcode_for_mobile_compat(tmp_path, out_path)
 
         tmp_path.unlink()
 
