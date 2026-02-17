@@ -1,16 +1,21 @@
 import { Link, useLocation } from "react-router-dom";
+import useIsMobile from "../hooks/useIsMobile";
 
 export default function Footer() {
   const location = useLocation();
+  const isMobile = useIsMobile();
 
   return (
-    <footer style={styles.footer}>
-      <div style={styles.brand}>Golf Swing Analyzer</div>
-      <nav style={styles.nav}>
+    <footer style={{ ...styles.footer, ...(isMobile ? styles.footerMobile : {}) }}>
+      <div style={{ ...styles.brand, ...(isMobile ? styles.brandMobile : {}) }}>
+        Golf Swing Analyzer
+      </div>
+      <nav style={{ ...styles.nav, ...(isMobile ? styles.navMobile : {}) }}>
         <Link
           to="/terms"
           style={{
             ...styles.navItem,
+            ...(isMobile ? styles.navItemMobile : {}),
             ...(location.pathname === "/terms" ? styles.navActive : {}),
           }}
         >
@@ -20,6 +25,7 @@ export default function Footer() {
           to="/privacy"
           style={{
             ...styles.navItem,
+            ...(isMobile ? styles.navItemMobile : {}),
             ...(location.pathname === "/privacy" ? styles.navActive : {}),
           }}
         >
@@ -29,6 +35,7 @@ export default function Footer() {
           to="/contact"
           style={{
             ...styles.navItem,
+            ...(isMobile ? styles.navItemMobile : {}),
             ...(location.pathname === "/contact" ? styles.navActive : {}),
           }}
         >
@@ -38,13 +45,14 @@ export default function Footer() {
           to="/legal"
           style={{
             ...styles.navItem,
+            ...(isMobile ? styles.navItemMobile : {}),
             ...(location.pathname === "/legal" ? styles.navActive : {}),
           }}
         >
           特定商取引法に基づく表記
         </Link>
       </nav>
-      <div style={styles.note}>
+      <div style={{ ...styles.note, ...(isMobile ? styles.noteMobile : {}) }}>
         © {new Date().getFullYear()} Golf Swing Analyzer
       </div>
     </footer>
@@ -90,5 +98,28 @@ const styles = {
   note: {
     fontSize: 12,
     color: "#94a3b8",
+  },
+  footerMobile: {
+    marginTop: 8,
+    padding: "16px 14px",
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: 8,
+  },
+  brandMobile: {
+    textAlign: "center",
+  },
+  navMobile: {
+    width: "100%",
+    justifyContent: "center",
+    gap: 8,
+  },
+  navItemMobile: {
+    fontSize: 11,
+    padding: "8px 10px",
+    textAlign: "center",
+  },
+  noteMobile: {
+    textAlign: "center",
   },
 };

@@ -1,10 +1,12 @@
-import { useRef, useState, useEffect } from "react";
+import { useRef, useState } from "react";
+import useIsMobile from "../hooks/useIsMobile";
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 
 function CompareAnalysis() {
   const videoARef = useRef(null);
   const videoBRef = useRef(null);
+  const isMobile = useIsMobile();
 
   const [fileA, setFileA] = useState(null);
   const [fileB, setFileB] = useState(null);
@@ -150,13 +152,17 @@ function CompareAnalysis() {
   const currentBURL = videoBURL || previewBURL;
 
   return (
-    <div style={styles.page}>
-      <h1 style={styles.title}>🏌️ Swing Compare Analysis</h1>
-      <p style={styles.subtitle}>2つのスイングを同期して比較</p>
+    <div style={{ ...styles.page, ...(isMobile ? styles.pageMobile : {}) }}>
+      <h1 style={{ ...styles.title, ...(isMobile ? styles.titleMobile : {}) }}>
+        🏌️ Swing Compare Analysis
+      </h1>
+      <p style={{ ...styles.subtitle, ...(isMobile ? styles.subtitleMobile : {}) }}>
+        2つのスイングを同期して比較
+      </p>
 
       {/* Upload */}
-      <div style={styles.card}>
-        <label style={styles.fileLabel}>
+      <div style={{ ...styles.card, ...(isMobile ? styles.cardMobile : {}) }}>
+        <label style={{ ...styles.fileLabel, ...(isMobile ? styles.fileLabelMobile : {}) }}>
           動画Aを選択
           <input
             type="file"
@@ -166,7 +172,7 @@ function CompareAnalysis() {
           />
         </label>
 
-        <label style={styles.fileLabel}>
+        <label style={{ ...styles.fileLabel, ...(isMobile ? styles.fileLabelMobile : {}) }}>
           動画Bを選択
           <input
             type="file"
@@ -181,6 +187,7 @@ function CompareAnalysis() {
           disabled={!fileA || !fileB}
           style={{
             ...styles.primaryButton,
+            ...(isMobile ? styles.primaryButtonMobile : {}),
             opacity: fileA && fileB ? 1 : 0.5,
           }}
         >
@@ -190,7 +197,13 @@ function CompareAnalysis() {
 
       {/* Progress */}
       {isAnalyzing && (
-        <div style={{ maxWidth: 520, margin: "0 auto 32px" }}>
+        <div
+          style={{
+            maxWidth: 520,
+            margin: "0 auto 32px",
+            ...(isMobile ? styles.progressWrapMobile : {}),
+          }}
+        >
           <div style={styles.progressBar}>
             <div
               style={{
@@ -199,35 +212,46 @@ function CompareAnalysis() {
               }}
             />
           </div>
-          <p style={styles.progressText}>解析中… {progress}%</p>
+          <p style={{ ...styles.progressText, ...(isMobile ? styles.progressTextMobile : {}) }}>
+            解析中… {progress}%
+          </p>
         </div>
       )}
 
       {/* Jump buttons（解析後のみ） */}
       {eventsA && eventsB && (
-        <div style={styles.jumpButtons}>
-          <JumpButton label="Start" onClick={() => jump("start")} />
-          <JumpButton label="Top" onClick={() => jump("top")} />
-          <JumpButton label="Impact" onClick={() => jump("impact")} />
-          <JumpButton label="Finish" onClick={() => jump("finish")} />
+        <div style={{ ...styles.jumpButtons, ...(isMobile ? styles.jumpButtonsMobile : {}) }}>
+          <JumpButton label="Start" onClick={() => jump("start")} isMobile={isMobile} />
+          <JumpButton label="Top" onClick={() => jump("top")} isMobile={isMobile} />
+          <JumpButton
+            label="Impact"
+            onClick={() => jump("impact")}
+            isMobile={isMobile}
+          />
+          <JumpButton
+            label="Finish"
+            onClick={() => jump("finish")}
+            isMobile={isMobile}
+          />
           <JumpButton
             label={isPlaying ? "Pause" : "Play"}
             onClick={togglePlay}
+            isMobile={isMobile}
           />
         </div>
       )}
 
       {/* Videos（片方だけでも表示） */}
       {(currentAURL || currentBURL) && (
-        <div style={{ maxWidth: 900, margin: "0 auto" }}>
-          <div style={styles.videoGrid}>
+        <div style={{ maxWidth: 900, margin: "0 auto", width: "100%" }}>
+          <div style={{ ...styles.videoGrid, ...(isMobile ? styles.videoGridMobile : {}) }}>
             {currentAURL && (
               <video
                 ref={videoARef}
                 src={currentAURL}
                 controls
                 playsInline
-                style={styles.video}
+                style={{ ...styles.video, ...(isMobile ? styles.videoMobile : {}) }}
               />
             )}
             {currentBURL && (
@@ -236,7 +260,7 @@ function CompareAnalysis() {
                 src={currentBURL}
                 controls
                 playsInline
-                style={styles.video}
+                style={{ ...styles.video, ...(isMobile ? styles.videoMobile : {}) }}
               />
             )}
           </div>
@@ -246,8 +270,11 @@ function CompareAnalysis() {
   );
 }
 
-const JumpButton = ({ label, onClick }) => (
-  <button onClick={onClick} style={styles.jumpButton}>
+const JumpButton = ({ label, onClick, isMobile }) => (
+  <button
+    onClick={onClick}
+    style={{ ...styles.jumpButton, ...(isMobile ? styles.jumpButtonMobile : {}) }}
+  >
     {label}
   </button>
 );
@@ -345,6 +372,61 @@ const styles = {
     marginTop: 6,
     color: "#cbd5e1",
     textAlign: "center",
+  },
+  pageMobile: {
+    minHeight: "auto",
+    padding: "14px 0 8px",
+  },
+  titleMobile: {
+    fontSize: 28,
+    marginBottom: 6,
+  },
+  subtitleMobile: {
+    fontSize: 14,
+    marginBottom: 18,
+  },
+  cardMobile: {
+    marginBottom: 18,
+    padding: 14,
+    borderRadius: 14,
+  },
+  fileLabelMobile: {
+    display: "block",
+    width: "100%",
+    boxSizing: "border-box",
+    textAlign: "center",
+    marginRight: 0,
+    marginBottom: 10,
+    padding: "12px 16px",
+  },
+  primaryButtonMobile: {
+    minHeight: 46,
+    marginTop: 10,
+  },
+  progressWrapMobile: {
+    marginBottom: 18,
+    padding: "0 2px",
+  },
+  progressTextMobile: {
+    marginTop: 8,
+  },
+  jumpButtonsMobile: {
+    gap: 6,
+    marginBottom: 10,
+  },
+  jumpButtonMobile: {
+    flex: 1,
+    minWidth: "30%",
+    minHeight: 38,
+    fontSize: 13,
+  },
+  videoGridMobile: {
+    gridTemplateColumns: "1fr",
+    gap: 10,
+  },
+  videoMobile: {
+    maxHeight: "45vh",
+    borderRadius: 10,
   },
 };
 
