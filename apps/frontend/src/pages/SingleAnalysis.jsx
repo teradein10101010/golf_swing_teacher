@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabase";
+import useIsMobile from "../hooks/useIsMobile";
 
 /* =====================
    環境変数（Vite）
@@ -11,6 +12,7 @@ const FREE_ACCESS_EFFECTIVE = FREE_ACCESS || !SUPABASE_CONFIGURED;
 
 function App({ user }) {
   const videoRef = useRef(null);
+  const isMobile = useIsMobile();
 
   // ... (既存のStateはそのまま)
   const [selectedFile, setSelectedFile] = useState(null);
@@ -304,13 +306,17 @@ function App({ user }) {
      Render
   ===================== */
   return (
-    <div style={styles.page}>
-      <h1 style={styles.title}>🏌️ Golf Swing Analyzer</h1>
-      <p style={styles.subtitle}>Upload your swing and analyze key moments</p>
+    <div style={{ ...styles.page, ...(isMobile ? styles.pageMobile : {}) }}>
+      <h1 style={{ ...styles.title, ...(isMobile ? styles.titleMobile : {}) }}>
+        🏌️ Golf Swing Analyzer
+      </h1>
+      <p style={{ ...styles.subtitle, ...(isMobile ? styles.subtitleMobile : {}) }}>
+        Upload your swing and analyze key moments
+      </p>
 
       {/* Upload */}
-      <div style={styles.card}>
-        <label style={styles.fileLabel}>
+      <div style={{ ...styles.card, ...(isMobile ? styles.cardMobile : {}) }}>
+        <label style={{ ...styles.fileLabel, ...(isMobile ? styles.fileLabelMobile : {}) }}>
           動画を選択
           <input
             type="file"
@@ -322,12 +328,14 @@ function App({ user }) {
 
         {originalVideoURL && (
           <>
-            <h3 style={styles.sectionTitle}>🎥 元動画</h3>
+            <h3 style={{ ...styles.sectionTitle, ...(isMobile ? styles.sectionTitleMobile : {}) }}>
+              🎥 元動画
+            </h3>
             <video
               src={originalVideoURL}
               controls
               playsInline
-              style={styles.video}
+              style={{ ...styles.video, ...(isMobile ? styles.videoMobile : {}) }}
             />
           </>
         )}
@@ -337,6 +345,7 @@ function App({ user }) {
           disabled={!selectedFile}
           style={{
             ...styles.primaryButton,
+            ...(isMobile ? styles.primaryButtonMobile : {}),
             background: selectedFile
               ? "linear-gradient(90deg,#22c55e,#16a34a)"
               : "#64748b",
@@ -349,7 +358,13 @@ function App({ user }) {
 
       {/* Progress */}
       {isAnalyzing && (
-        <div style={{ maxWidth: 520, margin: "0 auto 24px" }}>
+        <div
+          style={{
+            maxWidth: 520,
+            margin: "0 auto 24px",
+            ...(isMobile ? styles.progressWrapMobile : {}),
+          }}
+        >
           <div style={styles.progressBar}>
             <div
               style={{
@@ -358,7 +373,9 @@ function App({ user }) {
               }}
             />
           </div>
-          <p style={styles.progressText}>解析中… {progress}%</p>
+          <p style={{ ...styles.progressText, ...(isMobile ? styles.progressTextMobile : {}) }}>
+            解析中… {progress}%
+          </p>
         </div>
       )}
 
@@ -367,16 +384,34 @@ function App({ user }) {
           (リロード後はeventsがないかもしれないため、eventsがある場合のみボタンを出すなどの調整が必要)
       */}
       {videoURL && (
-        <div style={styles.card}>
-          <h3 style={styles.sectionTitle}>📊 解析結果</h3>
+        <div style={{ ...styles.card, ...(isMobile ? styles.cardMobile : {}) }}>
+          <h3 style={{ ...styles.sectionTitle, ...(isMobile ? styles.sectionTitleMobile : {}) }}>
+            📊 解析結果
+          </h3>
 
           {/* eventsがある場合のみジャンプボタン表示 */}
           {events && (
-            <div style={styles.jumpButtons}>
-              <JumpButton label="Start" onClick={() => jump(events.start)} />
-              <JumpButton label="Top" onClick={() => jump(events.top)} />
-              <JumpButton label="Impact" onClick={() => jump(events.impact)} />
-              <JumpButton label="Finish" onClick={() => jump(events.finish)} />
+            <div style={{ ...styles.jumpButtons, ...(isMobile ? styles.jumpButtonsMobile : {}) }}>
+              <JumpButton
+                label="Start"
+                onClick={() => jump(events.start)}
+                isMobile={isMobile}
+              />
+              <JumpButton
+                label="Top"
+                onClick={() => jump(events.top)}
+                isMobile={isMobile}
+              />
+              <JumpButton
+                label="Impact"
+                onClick={() => jump(events.impact)}
+                isMobile={isMobile}
+              />
+              <JumpButton
+                label="Finish"
+                onClick={() => jump(events.finish)}
+                isMobile={isMobile}
+              />
             </div>
           )}
 
@@ -385,7 +420,7 @@ function App({ user }) {
             src={videoURL}
             controls
             playsInline
-            style={styles.video}
+            style={{ ...styles.video, ...(isMobile ? styles.videoMobile : {}) }}
           />
 
           {/* 👇 有料化ボタンに変更 */}
@@ -406,6 +441,7 @@ function App({ user }) {
               }
               style={{
                 ...styles.primaryButton,
+                ...(isMobile ? styles.primaryButtonMobile : {}),
                 background: "linear-gradient(90deg, #6366f1, #4f46e5)", // Stripeっぽい色へ
                 cursor:
                   !user || isEntitlementLoading || entitlementError
@@ -437,11 +473,15 @@ function App({ user }) {
           )}
 
           {aiResult && (
-            <div style={styles.aiBox}>
+            <div style={{ ...styles.aiBox, ...(isMobile ? styles.aiBoxMobile : {}) }}>
               <div style={styles.aiHeader}>
-                <h4 style={styles.aiTitle}>🤖 AIコーチのアドバイス</h4>
+                <h4 style={{ ...styles.aiTitle, ...(isMobile ? styles.aiTitleMobile : {}) }}>
+                  🤖 AIコーチのアドバイス
+                </h4>
               </div>
-              <div style={styles.aiContent}>{renderAiAdvice(aiResult)}</div>
+              <div style={{ ...styles.aiContent, ...(isMobile ? styles.aiContentMobile : {}) }}>
+                {renderAiAdvice(aiResult)}
+              </div>
             </div>
           )}
         </div>
@@ -525,8 +565,11 @@ const renderAiAdvice = (text) => {
 /* =====================
    Components
 ===================== */
-const JumpButton = ({ label, onClick }) => (
-  <button onClick={onClick} style={styles.jumpButton}>
+const JumpButton = ({ label, onClick, isMobile }) => (
+  <button
+    onClick={onClick}
+    style={{ ...styles.jumpButton, ...(isMobile ? styles.jumpButtonMobile : {}) }}
+  >
     {label}
   </button>
 );
@@ -586,6 +629,12 @@ const styles = {
     background: "#334155",
     color: "#fff",
     cursor: "pointer",
+  },
+  jumpButtonMobile: {
+    flex: 1,
+    minWidth: "40%",
+    minHeight: 38,
+    fontSize: 13,
   },
   video: {
     width: "100%",
@@ -666,6 +715,66 @@ const styles = {
     fontSize: 12,
     color: "#fbbf24",
     textAlign: "center",
+  },
+  pageMobile: {
+    minHeight: "auto",
+    padding: "14px 0 8px",
+  },
+  titleMobile: {
+    fontSize: 28,
+    marginBottom: 4,
+  },
+  subtitleMobile: {
+    fontSize: 14,
+    marginBottom: 18,
+    padding: "0 4px",
+  },
+  cardMobile: {
+    marginBottom: 16,
+    padding: 14,
+    borderRadius: 14,
+  },
+  sectionTitleMobile: {
+    marginTop: 4,
+    marginBottom: 10,
+    fontSize: 16,
+  },
+  fileLabelMobile: {
+    display: "block",
+    width: "100%",
+    boxSizing: "border-box",
+    textAlign: "center",
+    padding: "12px 16px",
+  },
+  primaryButtonMobile: {
+    minHeight: 46,
+    fontSize: 15,
+  },
+  jumpButtonsMobile: {
+    gap: 6,
+  },
+  videoMobile: {
+    marginTop: 10,
+    borderRadius: 10,
+  },
+  progressWrapMobile: {
+    marginBottom: 16,
+    padding: "0 2px",
+  },
+  progressTextMobile: {
+    textAlign: "center",
+    marginTop: 8,
+  },
+  aiBoxMobile: {
+    padding: 14,
+    marginTop: 14,
+  },
+  aiTitleMobile: {
+    fontSize: 16,
+  },
+  aiContentMobile: {
+    fontSize: 14,
+    lineHeight: 1.75,
   },
 };
 

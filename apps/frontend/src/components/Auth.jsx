@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
+import useIsMobile from "../hooks/useIsMobile";
 
 export default function Auth({ onUserChange }) {
   const [user, setUser] = useState(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -47,9 +49,12 @@ export default function Auth({ onUserChange }) {
 
   if (user) {
     return (
-      <div style={styles.userBox}>
+      <div style={{ ...styles.userBox, ...(isMobile ? styles.userBoxMobile : {}) }}>
         <span style={{ fontSize: 13 }}>{user.email}</span>
-        <button style={styles.logout} onClick={() => supabase.auth.signOut()}>
+        <button
+          style={{ ...styles.logout, ...(isMobile ? styles.actionMobile : {}) }}
+          onClick={() => supabase.auth.signOut()}
+        >
           ログアウト
         </button>
       </div>
@@ -57,25 +62,38 @@ export default function Auth({ onUserChange }) {
   }
 
   return (
-    <div style={styles.authBox}>
+    <div style={{ ...styles.authBox, ...(isMobile ? styles.authBoxMobile : {}) }}>
       <input
-        style={styles.input}
+        style={{ ...styles.input, ...(isMobile ? styles.inputMobile : {}) }}
         placeholder="email"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
       />
       <input
-        style={styles.input}
+        style={{ ...styles.input, ...(isMobile ? styles.inputMobile : {}) }}
         type="password"
         placeholder="password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
       />
 
-      <button style={styles.login} onClick={login} disabled={loading}>
+      <button
+        style={{
+          ...styles.login,
+          ...(isMobile ? styles.actionMobile : {}),
+        }}
+        onClick={login}
+        disabled={loading}
+      >
         🔐 ログイン
       </button>
-      <button style={styles.signup} onClick={signup}>
+      <button
+        style={{
+          ...styles.signup,
+          ...(isMobile ? styles.actionMobile : {}),
+        }}
+        onClick={signup}
+      >
         新規登録
       </button>
     </div>
@@ -128,5 +146,27 @@ const styles = {
     borderRadius: 10,
     padding: "6px 12px",
     cursor: "pointer",
+  },
+  authBoxMobile: {
+    flexDirection: "column",
+    alignItems: "stretch",
+    width: "100%",
+  },
+  inputMobile: {
+    height: 40,
+    width: "100%",
+    boxSizing: "border-box",
+  },
+  actionMobile: {
+    height: 40,
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "0 12px",
+  },
+  userBoxMobile: {
+    flexDirection: "column",
+    alignItems: "stretch",
+    width: "100%",
+    gap: 8,
   },
 };
