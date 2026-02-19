@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import useIsMobile from "../hooks/useIsMobile";
+import { trackEvent } from "../lib/analytics";
 
 /* =====================
    環境変数（Vite）
@@ -318,6 +319,7 @@ function App({ user }) {
 
       const result = await res.json();
       if (result.advice) {
+        trackEvent("ai_advice_received", { mode: "single", flow: "paid" });
         setChatMessages((prev) => [
           ...prev,
           {
@@ -329,6 +331,7 @@ function App({ user }) {
         // URLを綺麗にする（オプション）
         window.history.replaceState(null, "", window.location.pathname);
       } else {
+        trackEvent("ai_request_error", { mode: "single", flow: "paid" });
         alert("支払いの検証に失敗しました");
         if (userMessageAdded) {
           setChatMessages((prev) => prev.slice(0, -1));
@@ -336,6 +339,7 @@ function App({ user }) {
       }
     } catch (err) {
       console.error(err);
+      trackEvent("ai_request_error", { mode: "single", flow: "paid" });
       alert("支払いの検証に失敗しました");
     } finally {
       setAiLoading(false);
@@ -345,6 +349,7 @@ function App({ user }) {
 
   const handleEntitledAI = async () => {
     if (!videoURL || !aiPrompt.trim() || aiRequestInFlightRef.current) return;
+    trackEvent("ai_prompt_submitted", { mode: "single", flow: "entitled" });
     aiRequestInFlightRef.current = true;
     setAiLoading(true);
     let token = null;
@@ -382,6 +387,7 @@ function App({ user }) {
       });
       const result = await res.json();
       if (result.advice) {
+        trackEvent("ai_advice_received", { mode: "single", flow: "entitled" });
         setChatMessages((prev) => [
           ...prev,
           {
@@ -390,6 +396,7 @@ function App({ user }) {
           },
         ]);
       } else {
+        trackEvent("ai_request_error", { mode: "single", flow: "entitled" });
         alert("AIアドバイスの取得に失敗しました");
         if (userMessageAdded) {
           setChatMessages((prev) => prev.slice(0, -1));
@@ -397,6 +404,7 @@ function App({ user }) {
       }
     } catch (err) {
       console.error(err);
+      trackEvent("ai_request_error", { mode: "single", flow: "entitled" });
       alert("AIアドバイスの取得に失敗しました");
     } finally {
       setAiLoading(false);
@@ -410,6 +418,11 @@ function App({ user }) {
   // ... (handleFileSelect, handleAnalyze, jump は既存のまま)
   const handleFileSelect = (file) => {
     if (!file) return;
+    trackEvent("video_file_selected", {
+      mode: "single",
+      file_type: file.type || "unknown",
+      file_size_mb: Number((file.size / (1024 * 1024)).toFixed(2)),
+    });
 
     closeAnalyzeEventSource();
     analyzeRequestInFlightRef.current = false;
@@ -428,6 +441,7 @@ function App({ user }) {
 
   const handleAnalyze = async () => {
     if (!selectedFile || analyzeRequestInFlightRef.current) return;
+    trackEvent("analysis_started", { mode: "single" });
     analyzeRequestInFlightRef.current = true;
     setIsAnalyzing(true);
     setProgress(0);
@@ -451,8 +465,10 @@ function App({ user }) {
         originalVideoURL: originalVideoURL || null,
       });
       await connectAnalyzeProgress(job_id);
+      trackEvent("analysis_completed", { mode: "single" });
     } catch (err) {
       console.error(err);
+      trackEvent("analysis_failed", { mode: "single" });
       alert("解析に失敗しました");
       if (!readSingleAnalysisCache()?.jobId) {
         clearSingleAnalysisCache();
@@ -482,10 +498,13 @@ function App({ user }) {
     return [...chatMessages, { role: "user", content }].slice(-MAX_CHAT_MESSAGES);
   };
 
-  const jump = (frame) => {
+  const jump = (frame, point) => {
     if (!videoRef.current) return;
     videoRef.current.pause();
     videoRef.current.currentTime = frame / fps;
+    if (point) {
+      trackEvent("analysis_jump", { mode: "single", point });
+    }
   };
 
   /* =====================
@@ -507,6 +526,7 @@ function App({ user }) {
     }
     checkoutRequestInFlightRef.current = true;
     setIsCheckingOut(true);
+    trackEvent("checkout_started", { product: "single_ai" });
 
     try {
       const { data } = await supabase.auth.getSession();
@@ -531,6 +551,7 @@ function App({ user }) {
 
       const session = await res.json();
       if (session.already_paid) {
+        trackEvent("checkout_skipped_paid", { product: "single_ai" });
         setIsEntitled(true);
         await handleEntitledAI();
         return;
@@ -541,9 +562,11 @@ function App({ user }) {
         throw new Error("Checkout URL not returned from backend");
       }
 
+      trackEvent("checkout_redirected", { product: "single_ai" });
       window.location.href = session.url;
     } catch (err) {
       console.error(err);
+      trackEvent("checkout_failed", { product: "single_ai" });
       alert("決済の開始に失敗しました");
     } finally {
       setIsCheckingOut(false);
@@ -643,22 +666,22 @@ function App({ user }) {
             <div style={{ ...styles.jumpButtons, ...(isMobile ? styles.jumpButtonsMobile : {}) }}>
               <JumpButton
                 label="Start"
-                onClick={() => jump(events.start)}
+                onClick={() => jump(events.start, "start")}
                 isMobile={isMobile}
               />
               <JumpButton
                 label="Top"
-                onClick={() => jump(events.top)}
+                onClick={() => jump(events.top, "top")}
                 isMobile={isMobile}
               />
               <JumpButton
                 label="Impact"
-                onClick={() => jump(events.impact)}
+                onClick={() => jump(events.impact, "impact")}
                 isMobile={isMobile}
               />
               <JumpButton
                 label="Finish"
-                onClick={() => jump(events.finish)}
+                onClick={() => jump(events.finish, "finish")}
                 isMobile={isMobile}
               />
             </div>
