@@ -4,15 +4,20 @@ import time
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core.auth import get_current_user, get_current_user_optional
 from app.core.config import DATA_DIR, FREE_ACCESS, VIDEOS_DIR
-from app.services.swing_analyzer import SwingAnalyzer
+from app.services.swing_analyzer import (
+    MAX_CHAT_MESSAGES,
+    MAX_USER_PROMPT_CHARS,
+    SwingAnalyzer,
+)
 from supabase_client import supabase
 
 router = APIRouter(prefix="/api")
@@ -26,8 +31,26 @@ checkout_session_cache = {}
 CHECKOUT_SESSION_TTL_SEC = 15 * 60
 
 
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1)
+
+
 class AIRequest(BaseModel):
     video_path: str
+    ai_prompt: str | None = Field(default=None, max_length=MAX_USER_PROMPT_CHARS)
+    ai_messages: list[ChatMessage] | None = Field(
+        default=None, max_length=MAX_CHAT_MESSAGES
+    )
+
+
+class AIPaidRequest(BaseModel):
+    session_id: str
+    video_path: str
+    ai_prompt: str | None = Field(default=None, max_length=MAX_USER_PROMPT_CHARS)
+    ai_messages: list[ChatMessage] | None = Field(
+        default=None, max_length=MAX_CHAT_MESSAGES
+    )
 
 
 def _is_entitled(user_id: str) -> bool:
@@ -132,10 +155,9 @@ async def create_checkout_session(
 
 
 @router.post("/analyze/ai-paid")
-async def analyze_ai_paid(request: Request, user=Depends(get_current_user_optional)):
-    data = await request.json()
-    session_id = data.get("session_id")
-    video_url_path = data.get("video_path")
+async def analyze_ai_paid(req: AIPaidRequest, user=Depends(get_current_user_optional)):
+    session_id = req.session_id
+    video_url_path = req.video_path
 
     if not FREE_ACCESS:
         if not user:
@@ -170,7 +192,15 @@ async def analyze_ai_paid(request: Request, user=Depends(get_current_user_option
         )
 
     csv_path = _csv_for_video(video_file_path)
-    advice_text = analyzer.analyze_video(video_file_path, csv_path=csv_path)
+    advice_text = analyzer.analyze_video(
+        video_file_path,
+        csv_path=csv_path,
+        user_prompt=req.ai_prompt,
+        chat_messages=[
+            {"role": msg.role, "content": msg.content}
+            for msg in (req.ai_messages or [])
+        ],
+    )
     if user:
         _grant_entitlement(user["sub"])
 
@@ -194,8 +224,18 @@ def analyze_ai_entitled(req: AIRequest, user=Depends(get_current_user_optional))
         if not _is_entitled(user["sub"]):
             raise HTTPException(status_code=403, detail="Not entitled")
     video_path = VIDEOS_DIR / Path(req.video_path).name
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Video file not found")
     csv_path = _csv_for_video(video_path)
-    advice = analyzer.analyze_video(video_path, csv_path=csv_path)
+    advice = analyzer.analyze_video(
+        video_path,
+        csv_path=csv_path,
+        user_prompt=req.ai_prompt,
+        chat_messages=[
+            {"role": msg.role, "content": msg.content}
+            for msg in (req.ai_messages or [])
+        ],
+    )
     return {"advice": advice}
 
 

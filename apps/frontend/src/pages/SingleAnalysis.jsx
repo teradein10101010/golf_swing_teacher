@@ -9,6 +9,13 @@ import { FREE_ACCESS, SUPABASE_CONFIGURED } from "../lib/supabase";
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 const FREE_ACCESS_EFFECTIVE = FREE_ACCESS || !SUPABASE_CONFIGURED;
+const MAX_AI_PROMPT_CHARS = 500;
+const MAX_CHAT_MESSAGES = 12;
+const AI_PROMPT_STORAGE_KEY = "singleAnalysis.aiPrompt";
+const DEFAULT_AI_PROMPT = `以下の三点を教えてください。
+1. このスイングの良い点
+2. 改善すべきポイント（3つ）
+3. それぞれに改善点に対する具体的な練習方法`;
 
 function App({ user }) {
   const videoRef = useRef(null);
@@ -23,7 +30,7 @@ function App({ user }) {
   const [progress, setProgress] = useState(0);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
-  const [aiResult, setAiResult] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
   const [isEntitled, setIsEntitled] = useState(false);
   const [isEntitlementLoading, setIsEntitlementLoading] = useState(false);
   const [entitlementError, setEntitlementError] = useState(null);
@@ -31,6 +38,15 @@ function App({ user }) {
 
   // ★ 新規: 決済処理中のローディング
   const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState(() => {
+    try {
+      const saved = window.sessionStorage.getItem(AI_PROMPT_STORAGE_KEY);
+      if (!saved) return DEFAULT_AI_PROMPT;
+      return saved.slice(0, MAX_AI_PROMPT_CHARS);
+    } catch {
+      return DEFAULT_AI_PROMPT;
+    }
+  });
 
   /* =====================
      ★ 新規: Stripeからの戻り処理 (初期化時)
@@ -128,6 +144,17 @@ function App({ user }) {
       setAiLoading(false);
       return;
     }
+    const nextMessages = buildNextMessages();
+    const userMessageAdded = nextMessages.length > chatMessages.length;
+    setChatMessages(nextMessages);
+    if (userMessageAdded) {
+      setAiPrompt("");
+      try {
+        window.sessionStorage.setItem(AI_PROMPT_STORAGE_KEY, "");
+      } catch {
+        // no-op
+      }
+    }
     // バックエンドで session_id を検証してから AIを実行
     const res = await fetch(`${API_BASE}/api/analyze/ai-paid`, {
       method: "POST",
@@ -138,26 +165,37 @@ function App({ user }) {
       body: JSON.stringify({
         session_id: sessionId,
         video_path: videoPath,
+        ai_prompt: aiPrompt.slice(0, MAX_AI_PROMPT_CHARS).trim(),
+        ai_messages: nextMessages,
       }),
     });
 
     const result = await res.json();
     if (result.advice) {
-      setAiResult(result.advice);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: result.advice,
+        },
+      ]);
       setIsEntitled(true);
       // URLを綺麗にする（オプション）
       window.history.replaceState(null, "", window.location.pathname);
     } else {
       alert("支払いの検証に失敗しました");
+      if (userMessageAdded) {
+        setChatMessages((prev) => prev.slice(0, -1));
+      }
     }
     setAiLoading(false);
   };
 
   const handleEntitledAI = async () => {
-    if (!videoURL) return;
-    setAiLoading(true);
+    if (!videoURL || !aiPrompt.trim()) return;
     let token = null;
     if (!FREE_ACCESS_EFFECTIVE && !freeAccessServer) {
+      setAiLoading(true);
       const { data } = await supabase.auth.getSession();
       token = data.session?.access_token;
       if (!token) {
@@ -166,6 +204,18 @@ function App({ user }) {
         return;
       }
     }
+    const nextMessages = buildNextMessages();
+    const userMessageAdded = nextMessages.length > chatMessages.length;
+    setChatMessages(nextMessages);
+    if (userMessageAdded) {
+      setAiPrompt("");
+      try {
+        window.sessionStorage.setItem(AI_PROMPT_STORAGE_KEY, "");
+      } catch {
+        // no-op
+      }
+    }
+    setAiLoading(true);
     const res = await fetch(`${API_BASE}/api/analyze/ai-entitled`, {
       method: "POST",
       headers: {
@@ -174,13 +224,24 @@ function App({ user }) {
       },
       body: JSON.stringify({
         video_path: videoURL.replace(API_BASE, ""),
+        ai_prompt: aiPrompt.slice(0, MAX_AI_PROMPT_CHARS).trim(),
+        ai_messages: nextMessages,
       }),
     });
     const result = await res.json();
     if (result.advice) {
-      setAiResult(result.advice);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: result.advice,
+        },
+      ]);
     } else {
       alert("AIアドバイスの取得に失敗しました");
+      if (userMessageAdded) {
+        setChatMessages((prev) => prev.slice(0, -1));
+      }
     }
     setAiLoading(false);
   };
@@ -199,7 +260,7 @@ function App({ user }) {
     // 前回結果をリセット
     setVideoURL(null);
     setEvents(null);
-    setAiResult(null);
+    setChatMessages([]);
   };
 
   const handleAnalyze = async () => {
@@ -233,6 +294,22 @@ function App({ user }) {
         setFps(data.result.fps);
       }
     };
+  };
+
+  const handleAiPromptChange = (e) => {
+    const next = e.target.value.slice(0, MAX_AI_PROMPT_CHARS);
+    setAiPrompt(next);
+    try {
+      window.sessionStorage.setItem(AI_PROMPT_STORAGE_KEY, next);
+    } catch {
+      // no-op
+    }
+  };
+
+  const buildNextMessages = () => {
+    const content = aiPrompt.slice(0, MAX_AI_PROMPT_CHARS).trim();
+    if (!content) return chatMessages;
+    return [...chatMessages, { role: "user", content }].slice(-MAX_CHAT_MESSAGES);
   };
 
   const jump = (frame) => {
@@ -423,67 +500,99 @@ function App({ user }) {
             style={{ ...styles.video, ...(isMobile ? styles.videoMobile : {}) }}
           />
 
-          {/* 👇 有料化ボタンに変更 */}
-          {!aiResult && (
-            <button
-              onClick={
-                entitlementError
-                  ? fetchEntitlement
-                  : isEntitled
-                  ? handleEntitledAI
-                  : handlePurchaseAI
-              }
-              disabled={
-                isCheckingOut ||
-                aiLoading ||
-                (!FREE_ACCESS_EFFECTIVE && !freeAccessServer && !user) ||
-                isEntitlementLoading
-              }
-              style={{
-                ...styles.primaryButton,
-                ...(isMobile ? styles.primaryButtonMobile : {}),
-                background: "linear-gradient(90deg, #6366f1, #4f46e5)", // Stripeっぽい色へ
-                cursor:
-                  !user || isEntitlementLoading || entitlementError
-                    ? "not-allowed"
-                    : "pointer",
-              }}
-            >
-              {!user && !FREE_ACCESS_EFFECTIVE && !freeAccessServer
-                ? "🔒 AIアドバイスの利用にはログイン後にサブスクリプションが必要です"
-                : entitlementError
-                ? "ユーザ確認に失敗しました（再試行）"
-                : isEntitlementLoading
-                ? "ユーザ確認中..."
-                : isEntitled
-                ? FREE_ACCESS_EFFECTIVE || freeAccessServer
-                  ? "🤖 AIコーチのアドバイスを見る（無料）"
-                  : "🤖 AIコーチのアドバイスを見る"
-                : isCheckingOut
-                ? "Stripeへ移動中..."
-                : "💎 AIコーチのアドバイスを購入 (¥500)"}
-            </button>
-          )}
-
-          {/* 解析中ローディング表示 */}
-          {aiLoading && (
-            <p style={{ textAlign: "center", marginTop: 10 }}>
-              AIが解析しています...
-            </p>
-          )}
-
-          {aiResult && (
+          {chatMessages.length > 0 || aiLoading ? (
             <div style={{ ...styles.aiBox, ...(isMobile ? styles.aiBoxMobile : {}) }}>
               <div style={styles.aiHeader}>
                 <h4 style={{ ...styles.aiTitle, ...(isMobile ? styles.aiTitleMobile : {}) }}>
-                  🤖 AIコーチのアドバイス
+                  🤖 AIコーチ チャット
                 </h4>
               </div>
               <div style={{ ...styles.aiContent, ...(isMobile ? styles.aiContentMobile : {}) }}>
-                {renderAiAdvice(aiResult)}
+                {chatMessages.map((msg, index) => (
+                  <div
+                    key={`${msg.role}-${index}`}
+                    style={{
+                      ...styles.chatBubble,
+                      ...(msg.role === "user" ? styles.userBubble : styles.assistantBubble),
+                    }}
+                  >
+                    <div style={styles.chatRole}>
+                      {msg.role === "user" ? "あなた" : "AIコーチ"}
+                    </div>
+                    {msg.role === "assistant" ? (
+                      renderAiAdvice(msg.content)
+                    ) : (
+                      <p style={styles.chatUserText}>{msg.content}</p>
+                    )}
+                  </div>
+                ))}
+                {aiLoading && (
+                  <div style={{ ...styles.chatBubble, ...styles.assistantBubble }}>
+                    <div style={styles.chatRole}>AIコーチ</div>
+                    <p style={{ ...styles.chatUserText, ...styles.chatLoadingText }}>
+                      AIが解析しています...
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
-          )}
+          ) : null}
+
+          <div style={styles.promptSection}>
+            <label style={styles.promptLabel} htmlFor="aiPromptInput">
+              AIへの依頼内容（編集可能・最大500文字）
+            </label>
+            <textarea
+              id="aiPromptInput"
+              value={aiPrompt}
+              onChange={handleAiPromptChange}
+              maxLength={MAX_AI_PROMPT_CHARS}
+              style={{ ...styles.promptTextarea, ...(isMobile ? styles.promptTextareaMobile : {}) }}
+            />
+            <p style={styles.promptCounter}>
+              {aiPrompt.length}/{MAX_AI_PROMPT_CHARS}
+            </p>
+          </div>
+
+          <button
+            onClick={
+              entitlementError
+                ? fetchEntitlement
+                : isEntitled
+                ? handleEntitledAI
+                : handlePurchaseAI
+            }
+            disabled={
+              isCheckingOut ||
+              aiLoading ||
+              (!FREE_ACCESS_EFFECTIVE && !freeAccessServer && !user) ||
+              isEntitlementLoading ||
+              (!isEntitled && !FREE_ACCESS_EFFECTIVE && !freeAccessServer ? false : !aiPrompt.trim())
+            }
+            style={{
+              ...styles.primaryButton,
+              ...(isMobile ? styles.primaryButtonMobile : {}),
+              background: "linear-gradient(90deg, #6366f1, #4f46e5)",
+              cursor:
+                !user || isEntitlementLoading || entitlementError
+                  ? "not-allowed"
+                  : "pointer",
+            }}
+          >
+            {!user && !FREE_ACCESS_EFFECTIVE && !freeAccessServer
+              ? "🔒 AIアドバイスの利用にはログイン後にサブスクリプションが必要です"
+              : entitlementError
+              ? "ユーザ確認に失敗しました（再試行）"
+              : isEntitlementLoading
+              ? "ユーザ確認中..."
+              : isEntitled
+              ? FREE_ACCESS_EFFECTIVE || freeAccessServer
+                ? "🤖 AIコーチに送信（無料）"
+                : "🤖 AIコーチに送信"
+              : isCheckingOut
+              ? "Stripeへ移動中..."
+              : "💎 AIコーチの利用を購入 (¥500)"}
+          </button>
         </div>
       )}
     </div>
@@ -683,6 +792,9 @@ const styles = {
     fontSize: 15,
     lineHeight: 1.85,
     letterSpacing: 0.2,
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
   },
   aiParagraph: {
     margin: "0 0 10px",
@@ -709,6 +821,66 @@ const styles = {
   },
   aiStrong: {
     color: "#f8fafc",
+  },
+  promptSection: {
+    marginTop: 14,
+  },
+  promptLabel: {
+    display: "block",
+    fontSize: 13,
+    color: "#cbd5e1",
+    marginBottom: 6,
+  },
+  promptTextarea: {
+    width: "100%",
+    minHeight: 120,
+    boxSizing: "border-box",
+    borderRadius: 10,
+    border: "1px solid #334155",
+    background: "#0f172a",
+    color: "#e2e8f0",
+    padding: 10,
+    fontSize: 14,
+    lineHeight: 1.5,
+    resize: "vertical",
+  },
+  promptTextareaMobile: {
+    minHeight: 110,
+  },
+  promptCounter: {
+    marginTop: 6,
+    marginBottom: 0,
+    textAlign: "right",
+    fontSize: 12,
+    color: "#94a3b8",
+  },
+  chatBubble: {
+    borderRadius: 12,
+    padding: 10,
+  },
+  userBubble: {
+    background: "#1d4ed8",
+    borderTopRightRadius: 4,
+    alignSelf: "flex-end",
+    maxWidth: "90%",
+  },
+  assistantBubble: {
+    background: "#0f172a",
+    border: "1px solid #1f2937",
+    borderTopLeftRadius: 4,
+  },
+  chatRole: {
+    fontSize: 12,
+    color: "#bfdbfe",
+    marginBottom: 6,
+    fontWeight: 600,
+  },
+  chatUserText: {
+    margin: 0,
+    whiteSpace: "pre-wrap",
+  },
+  chatLoadingText: {
+    color: "#cbd5e1",
   },
   payNote: {
     marginTop: 8,
