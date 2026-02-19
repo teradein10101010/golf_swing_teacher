@@ -7,14 +7,47 @@ const FREE_ACCESS_EFFECTIVE = FREE_ACCESS || !SUPABASE_CONFIGURED;
 const MAX_AI_PROMPT_CHARS = 500;
 const MAX_CHAT_MESSAGES = 12;
 const AI_PROMPT_STORAGE_KEY = "compareAnalysis.aiPrompt";
+const COMPARE_ANALYSIS_CACHE_KEY = "compareAnalysis.cache.v1";
 const DEFAULT_AI_PROMPT = `以下の観点で2つのスイングを比較して教えてください。
 1. それぞれの良い点
 2. 主な違い（3つ）
 3. それぞれに合った改善ドリル（各2つ）`;
 
+const readCompareAnalysisCache = () => {
+  try {
+    const raw = window.sessionStorage.getItem(COMPARE_ANALYSIS_CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
+const writeCompareAnalysisCache = (value) => {
+  try {
+    window.sessionStorage.setItem(COMPARE_ANALYSIS_CACHE_KEY, JSON.stringify(value));
+  } catch {
+    // no-op
+  }
+};
+
+const clearCompareAnalysisCache = () => {
+  try {
+    window.sessionStorage.removeItem(COMPARE_ANALYSIS_CACHE_KEY);
+  } catch {
+    // no-op
+  }
+};
+
 function CompareAnalysis({ user }) {
   const videoARef = useRef(null);
   const videoBRef = useRef(null);
+  const analyzeRequestInFlightRef = useRef(false);
+  const aiRequestInFlightRef = useRef(false);
+  const analyzeEventSourceARef = useRef(null);
+  const analyzeEventSourceBRef = useRef(null);
+  const progressARef = useRef(0);
+  const progressBRef = useRef(0);
   const isMobile = useIsMobile();
 
   const [fileA, setFileA] = useState(null);
@@ -115,6 +148,215 @@ function CompareAnalysis({ user }) {
     fetchEntitlement();
   }, [fetchEntitlement]);
 
+  const calcCompareProgress = (leftProgress, rightProgress) =>
+    Math.max(leftProgress * 0.5, 50 + rightProgress * 0.5);
+
+  const closeCompareEventSources = () => {
+    if (analyzeEventSourceARef.current) {
+      analyzeEventSourceARef.current.close();
+      analyzeEventSourceARef.current = null;
+    }
+    if (analyzeEventSourceBRef.current) {
+      analyzeEventSourceBRef.current.close();
+      analyzeEventSourceBRef.current = null;
+    }
+  };
+
+  const writeCompareProcessingCache = ({
+    leftJobId,
+    rightJobId,
+    leftProgress = progressARef.current,
+    rightProgress = progressBRef.current,
+  }) => {
+    writeCompareAnalysisCache({
+      status: "processing",
+      progress: calcCompareProgress(leftProgress, rightProgress),
+      left: {
+        jobId: leftJobId || null,
+        progress: leftProgress,
+        videoURL: videoAURL,
+        events: eventsA,
+        fps: fpsA,
+      },
+      right: {
+        jobId: rightJobId || null,
+        progress: rightProgress,
+        videoURL: videoBURL,
+        events: eventsB,
+        fps: fpsB,
+      },
+    });
+  };
+
+  const connectCompareProgress = ({ side, jobId, onDone }) =>
+    new Promise((resolve, reject) => {
+      const es = new EventSource(`${API_BASE}/api/analyze/progress/${jobId}`);
+      if (side === "left") {
+        if (analyzeEventSourceARef.current) analyzeEventSourceARef.current.close();
+        analyzeEventSourceARef.current = es;
+      } else {
+        if (analyzeEventSourceBRef.current) analyzeEventSourceBRef.current.close();
+        analyzeEventSourceBRef.current = es;
+      }
+
+      es.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        if (data.status === "not_found") {
+          es.close();
+          reject(new Error(`${side} analysis job not found`));
+          return;
+        }
+        if (data.status === "error") {
+          es.close();
+          reject(new Error(data.message || `${side} analysis failed`));
+          return;
+        }
+
+        if (typeof data.progress === "number") {
+          if (side === "left") {
+            progressARef.current = data.progress;
+          } else {
+            progressBRef.current = data.progress;
+          }
+          const combined = calcCompareProgress(progressARef.current, progressBRef.current);
+          setProgress(combined);
+          writeCompareProcessingCache({
+            leftJobId: side === "left" ? jobId : readCompareAnalysisCache()?.left?.jobId,
+            rightJobId: side === "right" ? jobId : readCompareAnalysisCache()?.right?.jobId,
+          });
+        }
+
+        if (data.status === "done") {
+          es.close();
+          onDone(data.result);
+          const fullVideoURL = API_BASE + data.result.video_url;
+          const cached = readCompareAnalysisCache() || {};
+          const next = {
+            ...cached,
+            status: "processing",
+            left:
+              side === "left"
+                ? {
+                    ...(cached.left || {}),
+                    jobId,
+                    progress: 100,
+                    videoURL: fullVideoURL,
+                    events: data.result.events,
+                    fps: data.result.fps,
+                  }
+                : cached.left,
+            right:
+              side === "right"
+                ? {
+                    ...(cached.right || {}),
+                    jobId,
+                    progress: 100,
+                    videoURL: fullVideoURL,
+                    events: data.result.events,
+                    fps: data.result.fps,
+                  }
+                : cached.right,
+          };
+          if (side === "left") {
+            progressARef.current = 100;
+          } else {
+            progressBRef.current = 100;
+          }
+          next.progress = calcCompareProgress(progressARef.current, progressBRef.current);
+          writeCompareAnalysisCache(next);
+          setProgress(next.progress);
+          resolve(data.result);
+        }
+      };
+
+      es.onerror = () => {
+        es.close();
+        reject(new Error(`${side} progress stream failed`));
+      };
+    });
+
+  useEffect(() => {
+    const cached = readCompareAnalysisCache();
+    if (!cached) return;
+
+    if (cached.left?.videoURL) {
+      setVideoAURL(cached.left.videoURL);
+      setEventsA(cached.left.events || null);
+      setFpsA(cached.left.fps || 30);
+    }
+    if (cached.right?.videoURL) {
+      setVideoBURL(cached.right.videoURL);
+      setEventsB(cached.right.events || null);
+      setFpsB(cached.right.fps || 30);
+    }
+    progressARef.current = cached.left?.progress || 0;
+    progressBRef.current = cached.right?.progress || 0;
+    setProgress(typeof cached.progress === "number" ? cached.progress : 0);
+
+    if (
+      cached.status === "processing" &&
+      (cached.left?.jobId || cached.right?.jobId)
+    ) {
+      setIsAnalyzing(true);
+      analyzeRequestInFlightRef.current = true;
+      const reconnect = [];
+      if (cached.left?.jobId && !cached.left?.videoURL) {
+        reconnect.push(
+          connectCompareProgress({
+            side: "left",
+            jobId: cached.left.jobId,
+            onDone: (r) => {
+              setVideoAURL(API_BASE + r.video_url);
+              setEventsA(r.events);
+              setFpsA(r.fps);
+            },
+          }),
+        );
+      }
+      if (cached.right?.jobId && !cached.right?.videoURL) {
+        reconnect.push(
+          connectCompareProgress({
+            side: "right",
+            jobId: cached.right.jobId,
+            onDone: (r) => {
+              setVideoBURL(API_BASE + r.video_url);
+              setEventsB(r.events);
+              setFpsB(r.fps);
+            },
+          }),
+        );
+      }
+      Promise.all(reconnect)
+        .then(() => {
+          const latest = readCompareAnalysisCache();
+          if (latest?.left?.videoURL && latest?.right?.videoURL) {
+            writeCompareAnalysisCache({
+              ...latest,
+              status: "done",
+              progress: 100,
+            });
+          }
+          setProgress(100);
+          setIsAnalyzing(false);
+          analyzeRequestInFlightRef.current = false;
+        })
+        .catch((err) => {
+          console.error(err);
+          alert("前回の比較解析状態を復元できませんでした");
+          clearCompareAnalysisCache();
+          setIsAnalyzing(false);
+          analyzeRequestInFlightRef.current = false;
+        });
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      closeCompareEventSources();
+    },
+    [],
+  );
+
   const buildNextMessages = () => {
     const content = aiPrompt.slice(0, MAX_AI_PROMPT_CHARS).trim();
     if (!content) return chatMessages;
@@ -122,32 +364,34 @@ function CompareAnalysis({ user }) {
   };
 
   const handleEntitledAI = async () => {
-    if (!videoAURL || !videoBURL || !aiPrompt.trim()) return;
+    if (!videoAURL || !videoBURL || !aiPrompt.trim() || aiRequestInFlightRef.current) return;
+    aiRequestInFlightRef.current = true;
+    setAiLoading(true);
 
     let token = null;
-    if (!FREE_ACCESS_EFFECTIVE && !freeAccessServer) {
-      const { data } = await supabase.auth.getSession();
-      token = data.session?.access_token;
-      if (!token) {
-        alert("ログインしてください");
-        return;
-      }
-    }
-
-    const nextMessages = buildNextMessages();
-    const userMessageAdded = nextMessages.length > chatMessages.length;
-    setChatMessages(nextMessages);
-    if (userMessageAdded) {
-      setAiPrompt("");
-      try {
-        window.sessionStorage.setItem(AI_PROMPT_STORAGE_KEY, "");
-      } catch {
-        // no-op
-      }
-    }
-
-    setAiLoading(true);
+    let userMessageAdded = false;
     try {
+      if (!FREE_ACCESS_EFFECTIVE && !freeAccessServer) {
+        const { data } = await supabase.auth.getSession();
+        token = data.session?.access_token;
+        if (!token) {
+          alert("ログインしてください");
+          return;
+        }
+      }
+
+      const nextMessages = buildNextMessages();
+      userMessageAdded = nextMessages.length > chatMessages.length;
+      setChatMessages(nextMessages);
+      if (userMessageAdded) {
+        setAiPrompt("");
+        try {
+          window.sessionStorage.setItem(AI_PROMPT_STORAGE_KEY, "");
+        } catch {
+          // no-op
+        }
+      }
+
       const res = await fetch(`${API_BASE}/api/analyze/ai-compare-entitled`, {
         method: "POST",
         headers: {
@@ -184,6 +428,7 @@ function CompareAnalysis({ user }) {
       }
     } finally {
       setAiLoading(false);
+      aiRequestInFlightRef.current = false;
     }
   };
 
@@ -202,19 +447,33 @@ function CompareAnalysis({ user }) {
   ===================== */
   const onSelectA = (file) => {
     if (!file) return;
+    closeCompareEventSources();
+    analyzeRequestInFlightRef.current = false;
+    progressARef.current = 0;
+    progressBRef.current = 0;
+    clearCompareAnalysisCache();
     setFileA(file);
     setPreviewAURL(URL.createObjectURL(file));
     setVideoAURL(null);
     setEventsA(null);
+    setProgress(0);
+    setIsAnalyzing(false);
     setChatMessages([]);
   };
 
   const onSelectB = (file) => {
     if (!file) return;
+    closeCompareEventSources();
+    analyzeRequestInFlightRef.current = false;
+    progressARef.current = 0;
+    progressBRef.current = 0;
+    clearCompareAnalysisCache();
     setFileB(file);
     setPreviewBURL(URL.createObjectURL(file));
     setVideoBURL(null);
     setEventsB(null);
+    setProgress(0);
+    setIsAnalyzing(false);
     setChatMessages([]);
   };
 
@@ -222,13 +481,18 @@ function CompareAnalysis({ user }) {
      解析
   ===================== */
   const analyze = async () => {
-    if (!fileA || !fileB) return;
+    if (!fileA || !fileB || analyzeRequestInFlightRef.current) return;
+    analyzeRequestInFlightRef.current = true;
+    closeCompareEventSources();
 
     setIsAnalyzing(true);
     setProgress(0);
     setChatMessages([]);
+    progressARef.current = 0;
+    progressBRef.current = 0;
+    clearCompareAnalysisCache();
 
-    const analyzeOne = async (file, onDone, offset) => {
+    const createSingleJob = async (file) => {
       const form = new FormData();
       form.append("video", file);
 
@@ -236,49 +500,81 @@ function CompareAnalysis({ user }) {
         method: "POST",
         body: form,
       });
+      if (!res.ok) {
+        throw new Error("analyze/single failed");
+      }
 
       const { job_id } = await res.json();
-
-      return new Promise((resolve) => {
-        const es = new EventSource(`${API_BASE}/api/analyze/progress/${job_id}`);
-
-        es.onmessage = (e) => {
-          const data = JSON.parse(e.data);
-
-          setProgress((p) => Math.max(p, offset + data.progress * 0.5));
-
-          if (data.status === "done") {
-            es.close();
-            onDone(data.result);
-            resolve();
-          }
-        };
-      });
+      return job_id;
     };
 
-    await Promise.all([
-      analyzeOne(
-        fileA,
-        (r) => {
-          setVideoAURL(API_BASE + r.video_url);
-          setEventsA(r.events);
-          setFpsA(r.fps);
+    try {
+      const [leftJobId, rightJobId] = await Promise.all([
+        createSingleJob(fileA),
+        createSingleJob(fileB),
+      ]);
+      writeCompareAnalysisCache({
+        status: "processing",
+        progress: 0,
+        left: {
+          jobId: leftJobId,
+          progress: 0,
+          videoURL: null,
+          events: null,
+          fps: 30,
         },
-        0,
-      ),
-      analyzeOne(
-        fileB,
-        (r) => {
-          setVideoBURL(API_BASE + r.video_url);
-          setEventsB(r.events);
-          setFpsB(r.fps);
+        right: {
+          jobId: rightJobId,
+          progress: 0,
+          videoURL: null,
+          events: null,
+          fps: 30,
         },
-        50,
-      ),
-    ]);
+      });
 
-    setProgress(100);
-    setIsAnalyzing(false);
+      await Promise.all([
+        connectCompareProgress({
+          side: "left",
+          jobId: leftJobId,
+          onDone: (r) => {
+            const fullURL = API_BASE + r.video_url;
+            setVideoAURL(fullURL);
+            setEventsA(r.events);
+            setFpsA(r.fps);
+          },
+        }),
+        connectCompareProgress({
+          side: "right",
+          jobId: rightJobId,
+          onDone: (r) => {
+            const fullURL = API_BASE + r.video_url;
+            setVideoBURL(fullURL);
+            setEventsB(r.events);
+            setFpsB(r.fps);
+          },
+        }),
+      ]);
+
+      setProgress(100);
+      const latest = readCompareAnalysisCache();
+      if (latest) {
+        writeCompareAnalysisCache({
+          ...latest,
+          status: "done",
+          progress: 100,
+        });
+      }
+    } catch (err) {
+      console.error(err);
+      alert("比較解析に失敗しました");
+      const cached = readCompareAnalysisCache();
+      if (!cached?.left?.jobId && !cached?.right?.jobId) {
+        clearCompareAnalysisCache();
+      }
+    } finally {
+      setIsAnalyzing(false);
+      analyzeRequestInFlightRef.current = false;
+    }
   };
 
   /* =====================
@@ -353,11 +649,11 @@ function CompareAnalysis({ user }) {
 
         <button
           onClick={analyze}
-          disabled={!fileA || !fileB}
+          disabled={!fileA || !fileB || isAnalyzing}
           style={{
             ...styles.primaryButton,
             ...(isMobile ? styles.primaryButtonMobile : {}),
-            opacity: fileA && fileB ? 1 : 0.5,
+            opacity: fileA && fileB && !isAnalyzing ? 1 : 0.5,
           }}
         >
           比較解析する

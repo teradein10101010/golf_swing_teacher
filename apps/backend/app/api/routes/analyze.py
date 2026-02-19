@@ -83,6 +83,7 @@ async def analyze_single(video: UploadFile = File(...)):
                         "impact": int(events["Impact"]),
                         "finish": int(events["Finish"]),
                     },
+                    "source_video_url": f"/videos/{src_name}",
                     "video_url": f"/videos/{hud_name}",
                 },
             }
