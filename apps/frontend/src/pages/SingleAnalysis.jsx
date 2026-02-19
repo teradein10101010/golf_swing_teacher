@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import useIsMobile from "../hooks/useIsMobile";
+import { trackEvent } from "../lib/analytics";
 
 /* =====================
    環境変数（Vite）
@@ -172,6 +173,7 @@ function App({ user }) {
 
     const result = await res.json();
     if (result.advice) {
+      trackEvent("feedback_viewed", { mode: "single" });
       setChatMessages((prev) => [
         ...prev,
         {
@@ -230,6 +232,7 @@ function App({ user }) {
     });
     const result = await res.json();
     if (result.advice) {
+      trackEvent("feedback_viewed", { mode: "single" });
       setChatMessages((prev) => [
         ...prev,
         {
@@ -266,6 +269,7 @@ function App({ user }) {
   const handleAnalyze = async () => {
     if (!selectedFile) return;
 
+    trackEvent("analysis_started", { mode: "single" });
     setIsAnalyzing(true);
     setProgress(0);
 
@@ -288,6 +292,7 @@ function App({ user }) {
       if (data.status === "done") {
         es.close();
         setIsAnalyzing(false);
+        trackEvent("swing_video_uploaded", { mode: "single" });
 
         setVideoURL(API_BASE + data.result.video_url);
         setEvents(data.result.events);

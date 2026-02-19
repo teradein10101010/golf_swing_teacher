@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { supabase, FREE_ACCESS, SUPABASE_CONFIGURED } from "../lib/supabase";
 import useIsMobile from "../hooks/useIsMobile";
+import { trackEvent } from "../lib/analytics";
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 const FREE_ACCESS_EFFECTIVE = FREE_ACCESS || !SUPABASE_CONFIGURED;
@@ -163,6 +164,7 @@ function CompareAnalysis({ user }) {
       });
       const result = await res.json();
       if (result.advice) {
+        trackEvent("feedback_viewed", { mode: "compare" });
         setChatMessages((prev) => [
           ...prev,
           {
@@ -224,6 +226,7 @@ function CompareAnalysis({ user }) {
   const analyze = async () => {
     if (!fileA || !fileB) return;
 
+    trackEvent("analysis_started", { mode: "compare" });
     setIsAnalyzing(true);
     setProgress(0);
     setChatMessages([]);
@@ -279,6 +282,7 @@ function CompareAnalysis({ user }) {
 
     setProgress(100);
     setIsAnalyzing(false);
+    trackEvent("swing_video_uploaded", { mode: "compare", video_count: 2 });
   };
 
   /* =====================

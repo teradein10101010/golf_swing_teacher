@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import useIsMobile from "../hooks/useIsMobile";
+import { trackEvent } from "../lib/analytics";
 
 export default function Auth({ onUserChange }) {
   const [user, setUser] = useState(null);
@@ -38,13 +39,18 @@ export default function Auth({ onUserChange }) {
       } else {
         alert("ログインに失敗しました。しばらくしてから再度お試しください");
       }
+    } else {
+      trackEvent("login_completed");
     }
   };
 
   const signup = async () => {
     const { error } = await supabase.auth.signUp({ email, password });
     if (error) alert(error.message);
-    else alert("登録完了！ログインしてください");
+    else {
+      trackEvent("signup_completed");
+      alert("登録完了！ログインしてください");
+    }
   };
 
   if (user) {
