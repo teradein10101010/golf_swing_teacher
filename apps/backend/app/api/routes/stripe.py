@@ -53,6 +53,15 @@ class AIPaidRequest(BaseModel):
     )
 
 
+class AICompareRequest(BaseModel):
+    left_video_path: str
+    right_video_path: str
+    ai_prompt: str | None = Field(default=None, max_length=MAX_USER_PROMPT_CHARS)
+    ai_messages: list[ChatMessage] | None = Field(
+        default=None, max_length=MAX_CHAT_MESSAGES
+    )
+
+
 def _is_entitled(user_id: str) -> bool:
     if FREE_ACCESS:
         return True
@@ -230,6 +239,37 @@ def analyze_ai_entitled(req: AIRequest, user=Depends(get_current_user_optional))
     advice = analyzer.analyze_video(
         video_path,
         csv_path=csv_path,
+        user_prompt=req.ai_prompt,
+        chat_messages=[
+            {"role": msg.role, "content": msg.content}
+            for msg in (req.ai_messages or [])
+        ],
+    )
+    return {"advice": advice}
+
+
+@router.post("/analyze/ai-compare-entitled")
+def analyze_ai_compare_entitled(
+    req: AICompareRequest, user=Depends(get_current_user_optional)
+):
+    if not FREE_ACCESS:
+        if not user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if not _is_entitled(user["sub"]):
+            raise HTTPException(status_code=403, detail="Not entitled")
+
+    left_video_path = VIDEOS_DIR / Path(req.left_video_path).name
+    right_video_path = VIDEOS_DIR / Path(req.right_video_path).name
+    if not left_video_path.exists():
+        raise HTTPException(status_code=404, detail="Left video file not found")
+    if not right_video_path.exists():
+        raise HTTPException(status_code=404, detail="Right video file not found")
+
+    advice = analyzer.analyze_comparison_videos(
+        left_video_path,
+        right_video_path,
+        left_csv_path=_csv_for_video(left_video_path),
+        right_csv_path=_csv_for_video(right_video_path),
         user_prompt=req.ai_prompt,
         chat_messages=[
             {"role": msg.role, "content": msg.content}
