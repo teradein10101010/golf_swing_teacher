@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { supabase, FREE_ACCESS, SUPABASE_CONFIGURED } from "../lib/supabase";
 import useIsMobile from "../hooks/useIsMobile";
+import { trackEvent } from "../lib/analytics";
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 const FREE_ACCESS_EFFECTIVE = FREE_ACCESS || !SUPABASE_CONFIGURED;
@@ -365,6 +366,7 @@ function CompareAnalysis({ user }) {
 
   const handleEntitledAI = async () => {
     if (!videoAURL || !videoBURL || !aiPrompt.trim() || aiRequestInFlightRef.current) return;
+    trackEvent("ai_prompt_submitted", { mode: "compare", flow: "entitled" });
     aiRequestInFlightRef.current = true;
     setAiLoading(true);
 
@@ -407,6 +409,7 @@ function CompareAnalysis({ user }) {
       });
       const result = await res.json();
       if (result.advice) {
+        trackEvent("ai_advice_received", { mode: "compare", flow: "entitled" });
         setChatMessages((prev) => [
           ...prev,
           {
@@ -415,6 +418,7 @@ function CompareAnalysis({ user }) {
           },
         ]);
       } else {
+        trackEvent("ai_request_error", { mode: "compare", flow: "entitled" });
         alert("比較AIアドバイスの取得に失敗しました");
         if (userMessageAdded) {
           setChatMessages((prev) => prev.slice(0, -1));
@@ -422,6 +426,7 @@ function CompareAnalysis({ user }) {
       }
     } catch (err) {
       console.error(err);
+      trackEvent("ai_request_error", { mode: "compare", flow: "entitled" });
       alert("比較AIアドバイスの取得に失敗しました");
       if (userMessageAdded) {
         setChatMessages((prev) => prev.slice(0, -1));
@@ -447,6 +452,12 @@ function CompareAnalysis({ user }) {
   ===================== */
   const onSelectA = (file) => {
     if (!file) return;
+    trackEvent("video_file_selected", {
+      mode: "compare",
+      side: "left",
+      file_type: file.type || "unknown",
+      file_size_mb: Number((file.size / (1024 * 1024)).toFixed(2)),
+    });
     closeCompareEventSources();
     analyzeRequestInFlightRef.current = false;
     progressARef.current = 0;
@@ -463,6 +474,12 @@ function CompareAnalysis({ user }) {
 
   const onSelectB = (file) => {
     if (!file) return;
+    trackEvent("video_file_selected", {
+      mode: "compare",
+      side: "right",
+      file_type: file.type || "unknown",
+      file_size_mb: Number((file.size / (1024 * 1024)).toFixed(2)),
+    });
     closeCompareEventSources();
     analyzeRequestInFlightRef.current = false;
     progressARef.current = 0;
@@ -482,6 +499,7 @@ function CompareAnalysis({ user }) {
   ===================== */
   const analyze = async () => {
     if (!fileA || !fileB || analyzeRequestInFlightRef.current) return;
+    trackEvent("analysis_started", { mode: "compare" });
     analyzeRequestInFlightRef.current = true;
     closeCompareEventSources();
 
@@ -556,6 +574,7 @@ function CompareAnalysis({ user }) {
       ]);
 
       setProgress(100);
+      trackEvent("analysis_completed", { mode: "compare" });
       const latest = readCompareAnalysisCache();
       if (latest) {
         writeCompareAnalysisCache({
@@ -566,6 +585,7 @@ function CompareAnalysis({ user }) {
       }
     } catch (err) {
       console.error(err);
+      trackEvent("analysis_failed", { mode: "compare" });
       alert("比較解析に失敗しました");
       const cached = readCompareAnalysisCache();
       if (!cached?.left?.jobId && !cached?.right?.jobId) {
@@ -584,12 +604,14 @@ function CompareAnalysis({ user }) {
     videoARef.current?.play();
     videoBRef.current?.play();
     setIsPlaying(true);
+    trackEvent("video_sync_play", { mode: "compare" });
   };
 
   const pause = () => {
     videoARef.current?.pause();
     videoBRef.current?.pause();
     setIsPlaying(false);
+    trackEvent("video_sync_pause", { mode: "compare" });
   };
 
   const togglePlay = () => {
@@ -607,6 +629,7 @@ function CompareAnalysis({ user }) {
 
     videoBRef.current.pause();
     videoBRef.current.currentTime = eventsB[key] / fpsB;
+    trackEvent("analysis_jump", { mode: "compare", point: key });
   };
 
   /* =====================

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 
 import SingleAnalysis from "./pages/SingleAnalysis";
@@ -12,6 +12,7 @@ import Footer from "./components/Footer";
 import MobileTabBar from "./components/MobileTabBar";
 import MobileMenu from "./components/MobileMenu";
 import useIsMobile from "./hooks/useIsMobile";
+import { initAnalytics, trackPageView } from "./lib/analytics";
 
 export default function App() {
   return (
@@ -26,6 +27,14 @@ function AppLayout() {
   const isMobile = useIsMobile();
   const location = useLocation();
   const showMobileTabBar = isMobile && ["/", "/compare"].includes(location.pathname);
+
+  useEffect(() => {
+    initAnalytics();
+  }, []);
+
+  useEffect(() => {
+    trackPageView(`${location.pathname}${location.search}`);
+  }, [location.pathname, location.search]);
 
   return (
     <div

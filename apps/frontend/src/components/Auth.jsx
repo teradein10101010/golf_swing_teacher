@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import useIsMobile from "../hooks/useIsMobile";
+import { trackEvent } from "../lib/analytics";
 
 export default function Auth({ onUserChange }) {
   const [user, setUser] = useState(null);
@@ -33,18 +34,26 @@ export default function Auth({ onUserChange }) {
     });
     setLoading(false);
     if (error) {
+      trackEvent("auth_error", { action: "login" });
       if (error.message === "Invalid login credentials") {
         alert("メールアドレスまたはパスワードが正しくありません");
       } else {
         alert("ログインに失敗しました。しばらくしてから再度お試しください");
       }
+      return;
     }
+    trackEvent("login", { method: "email" });
   };
 
   const signup = async () => {
     const { error } = await supabase.auth.signUp({ email, password });
-    if (error) alert(error.message);
-    else alert("登録完了！ログインしてください");
+    if (error) {
+      trackEvent("auth_error", { action: "signup" });
+      alert(error.message);
+    } else {
+      trackEvent("sign_up", { method: "email" });
+      alert("登録完了！ログインしてください");
+    }
   };
 
   if (user) {
@@ -53,7 +62,10 @@ export default function Auth({ onUserChange }) {
         <span style={{ fontSize: 13 }}>{user.email}</span>
         <button
           style={{ ...styles.logout, ...(isMobile ? styles.actionMobile : {}) }}
-          onClick={() => supabase.auth.signOut()}
+          onClick={() => {
+            trackEvent("logout");
+            supabase.auth.signOut();
+          }}
         >
           ログアウト
         </button>
