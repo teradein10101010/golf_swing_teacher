@@ -12,13 +12,44 @@ const FREE_ACCESS_EFFECTIVE = FREE_ACCESS || !SUPABASE_CONFIGURED;
 const MAX_AI_PROMPT_CHARS = 500;
 const MAX_CHAT_MESSAGES = 12;
 const AI_PROMPT_STORAGE_KEY = "singleAnalysis.aiPrompt";
+const SINGLE_ANALYSIS_CACHE_KEY = "singleAnalysis.cache.v1";
 const DEFAULT_AI_PROMPT = `以下の三点を教えてください。
 1. このスイングの良い点
 2. 改善すべきポイント（3つ）
 3. それぞれに改善点に対する具体的な練習方法`;
 
+const readSingleAnalysisCache = () => {
+  try {
+    const raw = window.sessionStorage.getItem(SINGLE_ANALYSIS_CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
+const writeSingleAnalysisCache = (value) => {
+  try {
+    window.sessionStorage.setItem(SINGLE_ANALYSIS_CACHE_KEY, JSON.stringify(value));
+  } catch {
+    // no-op
+  }
+};
+
+const clearSingleAnalysisCache = () => {
+  try {
+    window.sessionStorage.removeItem(SINGLE_ANALYSIS_CACHE_KEY);
+  } catch {
+    // no-op
+  }
+};
+
 function App({ user }) {
   const videoRef = useRef(null);
+  const analyzeRequestInFlightRef = useRef(false);
+  const aiRequestInFlightRef = useRef(false);
+  const checkoutRequestInFlightRef = useRef(false);
+  const analyzeEventSourceRef = useRef(null);
   const isMobile = useIsMobile();
 
   // ... (既存のStateはそのまま)
@@ -131,119 +162,246 @@ function App({ user }) {
     fetchEntitlement();
   }, [fetchEntitlement]);
 
+  const closeAnalyzeEventSource = () => {
+    if (!analyzeEventSourceRef.current) return;
+    analyzeEventSourceRef.current.close();
+    analyzeEventSourceRef.current = null;
+  };
+
+  const connectAnalyzeProgress = (jobId) =>
+    new Promise((resolve, reject) => {
+      closeAnalyzeEventSource();
+      const es = new EventSource(`${API_BASE}/api/analyze/progress/${jobId}`);
+      analyzeEventSourceRef.current = es;
+
+      es.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+
+        if (data.status === "not_found") {
+          closeAnalyzeEventSource();
+          clearSingleAnalysisCache();
+          setIsAnalyzing(false);
+          analyzeRequestInFlightRef.current = false;
+          reject(new Error("analysis job not found"));
+          return;
+        }
+
+        if (typeof data.progress === "number") {
+          setProgress(data.progress);
+        }
+
+        if (data.status === "done") {
+          closeAnalyzeEventSource();
+          const sourceVideoURL = data.result.source_video_url
+            ? API_BASE + data.result.source_video_url
+            : null;
+          if (sourceVideoURL) {
+            setOriginalVideoURL(sourceVideoURL);
+          }
+          setVideoURL(API_BASE + data.result.video_url);
+          setEvents(data.result.events);
+          setFps(data.result.fps);
+          setProgress(100);
+          setIsAnalyzing(false);
+          analyzeRequestInFlightRef.current = false;
+          writeSingleAnalysisCache({
+            status: "done",
+            progress: 100,
+            originalVideoURL: sourceVideoURL || originalVideoURL || null,
+            videoURL: API_BASE + data.result.video_url,
+            events: data.result.events,
+            fps: data.result.fps,
+          });
+          resolve(data.result);
+          return;
+        }
+
+        if (data.status === "error") {
+          closeAnalyzeEventSource();
+          clearSingleAnalysisCache();
+          setIsAnalyzing(false);
+          analyzeRequestInFlightRef.current = false;
+          reject(new Error(data.message || "analysis failed"));
+          return;
+        }
+
+        writeSingleAnalysisCache({
+          status: "processing",
+          jobId,
+          progress: typeof data.progress === "number" ? data.progress : 0,
+          originalVideoURL: originalVideoURL || null,
+        });
+      };
+
+      es.onerror = () => {
+        closeAnalyzeEventSource();
+        reject(new Error("analyze/progress stream failed"));
+      };
+    });
+
+  useEffect(() => {
+    const cached = readSingleAnalysisCache();
+    if (!cached) return;
+
+    if (cached.status === "done" && cached.videoURL) {
+      setOriginalVideoURL(cached.originalVideoURL || null);
+      setVideoURL(cached.videoURL);
+      setEvents(cached.events || null);
+      setFps(cached.fps || 30);
+      setProgress(100);
+      return;
+    }
+
+    if (cached.status === "processing" && cached.jobId) {
+      if (cached.originalVideoURL) {
+        setOriginalVideoURL(cached.originalVideoURL);
+      }
+      setIsAnalyzing(true);
+      setProgress(typeof cached.progress === "number" ? cached.progress : 0);
+      analyzeRequestInFlightRef.current = true;
+      connectAnalyzeProgress(cached.jobId).catch((err) => {
+        console.error(err);
+        setIsAnalyzing(false);
+        analyzeRequestInFlightRef.current = false;
+        alert("前回の解析状態を復元できませんでした");
+      });
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      closeAnalyzeEventSource();
+    },
+    [],
+  );
+
   const verifyPaymentAndRunAI = async (sessionId, videoPath) => {
     if (FREE_ACCESS_EFFECTIVE || freeAccessServer) {
       await handleEntitledAI();
       return;
     }
+    if (aiRequestInFlightRef.current) return;
+    aiRequestInFlightRef.current = true;
     setAiLoading(true);
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    if (!token) {
-      alert("ログインしてください");
-      setAiLoading(false);
-      return;
-    }
-    const nextMessages = buildNextMessages();
-    const userMessageAdded = nextMessages.length > chatMessages.length;
-    setChatMessages(nextMessages);
-    if (userMessageAdded) {
-      setAiPrompt("");
-      try {
-        window.sessionStorage.setItem(AI_PROMPT_STORAGE_KEY, "");
-      } catch {
-        // no-op
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) {
+        alert("ログインしてください");
+        return;
       }
-    }
-    // バックエンドで session_id を検証してから AIを実行
-    const res = await fetch(`${API_BASE}/api/analyze/ai-paid`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        session_id: sessionId,
-        video_path: videoPath,
-        ai_prompt: aiPrompt.slice(0, MAX_AI_PROMPT_CHARS).trim(),
-        ai_messages: nextMessages,
-      }),
-    });
-
-    const result = await res.json();
-    if (result.advice) {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: result.advice,
-        },
-      ]);
-      setIsEntitled(true);
-      // URLを綺麗にする（オプション）
-      window.history.replaceState(null, "", window.location.pathname);
-    } else {
-      alert("支払いの検証に失敗しました");
+      const nextMessages = buildNextMessages();
+      const userMessageAdded = nextMessages.length > chatMessages.length;
+      setChatMessages(nextMessages);
       if (userMessageAdded) {
-        setChatMessages((prev) => prev.slice(0, -1));
+        setAiPrompt("");
+        try {
+          window.sessionStorage.setItem(AI_PROMPT_STORAGE_KEY, "");
+        } catch {
+          // no-op
+        }
       }
+      // バックエンドで session_id を検証してから AIを実行
+      const res = await fetch(`${API_BASE}/api/analyze/ai-paid`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          session_id: sessionId,
+          video_path: videoPath,
+          ai_prompt: aiPrompt.slice(0, MAX_AI_PROMPT_CHARS).trim(),
+          ai_messages: nextMessages,
+        }),
+      });
+
+      const result = await res.json();
+      if (result.advice) {
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: result.advice,
+          },
+        ]);
+        setIsEntitled(true);
+        // URLを綺麗にする（オプション）
+        window.history.replaceState(null, "", window.location.pathname);
+      } else {
+        alert("支払いの検証に失敗しました");
+        if (userMessageAdded) {
+          setChatMessages((prev) => prev.slice(0, -1));
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      alert("支払いの検証に失敗しました");
+    } finally {
+      setAiLoading(false);
+      aiRequestInFlightRef.current = false;
     }
-    setAiLoading(false);
   };
 
   const handleEntitledAI = async () => {
-    if (!videoURL || !aiPrompt.trim()) return;
-    let token = null;
-    if (!FREE_ACCESS_EFFECTIVE && !freeAccessServer) {
-      setAiLoading(true);
-      const { data } = await supabase.auth.getSession();
-      token = data.session?.access_token;
-      if (!token) {
-        alert("ログインしてください");
-        setAiLoading(false);
-        return;
-      }
-    }
-    const nextMessages = buildNextMessages();
-    const userMessageAdded = nextMessages.length > chatMessages.length;
-    setChatMessages(nextMessages);
-    if (userMessageAdded) {
-      setAiPrompt("");
-      try {
-        window.sessionStorage.setItem(AI_PROMPT_STORAGE_KEY, "");
-      } catch {
-        // no-op
-      }
-    }
+    if (!videoURL || !aiPrompt.trim() || aiRequestInFlightRef.current) return;
+    aiRequestInFlightRef.current = true;
     setAiLoading(true);
-    const res = await fetch(`${API_BASE}/api/analyze/ai-entitled`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({
-        video_path: videoURL.replace(API_BASE, ""),
-        ai_prompt: aiPrompt.slice(0, MAX_AI_PROMPT_CHARS).trim(),
-        ai_messages: nextMessages,
-      }),
-    });
-    const result = await res.json();
-    if (result.advice) {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: result.advice,
-        },
-      ]);
-    } else {
-      alert("AIアドバイスの取得に失敗しました");
-      if (userMessageAdded) {
-        setChatMessages((prev) => prev.slice(0, -1));
+    let token = null;
+    try {
+      if (!FREE_ACCESS_EFFECTIVE && !freeAccessServer) {
+        const { data } = await supabase.auth.getSession();
+        token = data.session?.access_token;
+        if (!token) {
+          alert("ログインしてください");
+          return;
+        }
       }
+      const nextMessages = buildNextMessages();
+      const userMessageAdded = nextMessages.length > chatMessages.length;
+      setChatMessages(nextMessages);
+      if (userMessageAdded) {
+        setAiPrompt("");
+        try {
+          window.sessionStorage.setItem(AI_PROMPT_STORAGE_KEY, "");
+        } catch {
+          // no-op
+        }
+      }
+      const res = await fetch(`${API_BASE}/api/analyze/ai-entitled`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          video_path: videoURL.replace(API_BASE, ""),
+          ai_prompt: aiPrompt.slice(0, MAX_AI_PROMPT_CHARS).trim(),
+          ai_messages: nextMessages,
+        }),
+      });
+      const result = await res.json();
+      if (result.advice) {
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: result.advice,
+          },
+        ]);
+      } else {
+        alert("AIアドバイスの取得に失敗しました");
+        if (userMessageAdded) {
+          setChatMessages((prev) => prev.slice(0, -1));
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      alert("AIアドバイスの取得に失敗しました");
+    } finally {
+      setAiLoading(false);
+      aiRequestInFlightRef.current = false;
     }
-    setAiLoading(false);
   };
 
   /* =====================
@@ -253,6 +411,9 @@ function App({ user }) {
   const handleFileSelect = (file) => {
     if (!file) return;
 
+    closeAnalyzeEventSource();
+    analyzeRequestInFlightRef.current = false;
+    clearSingleAnalysisCache();
     setSelectedFile(file);
 
     const localURL = URL.createObjectURL(file);
@@ -260,40 +421,49 @@ function App({ user }) {
     // 前回結果をリセット
     setVideoURL(null);
     setEvents(null);
+    setProgress(0);
+    setIsAnalyzing(false);
     setChatMessages([]);
   };
 
   const handleAnalyze = async () => {
-    if (!selectedFile) return;
-
+    if (!selectedFile || analyzeRequestInFlightRef.current) return;
+    analyzeRequestInFlightRef.current = true;
     setIsAnalyzing(true);
     setProgress(0);
+    clearSingleAnalysisCache();
+    try {
+      const form = new FormData();
+      form.append("video", selectedFile);
 
-    const form = new FormData();
-    form.append("video", selectedFile);
-
-    const res = await fetch(`${API_BASE}/api/analyze/single`, {
-      method: "POST",
-      body: form,
-    });
-
-    const { job_id } = await res.json();
-
-    const es = new EventSource(`${API_BASE}/api/analyze/progress/${job_id}`);
-
-    es.onmessage = (e) => {
-      const data = JSON.parse(e.data);
-      setProgress(data.progress);
-
-      if (data.status === "done") {
-        es.close();
-        setIsAnalyzing(false);
-
-        setVideoURL(API_BASE + data.result.video_url);
-        setEvents(data.result.events);
-        setFps(data.result.fps);
+      const res = await fetch(`${API_BASE}/api/analyze/single`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) {
+        throw new Error("analyze/single failed");
       }
-    };
+      const { job_id } = await res.json();
+      writeSingleAnalysisCache({
+        status: "processing",
+        jobId: job_id,
+        progress: 0,
+        originalVideoURL: originalVideoURL || null,
+      });
+      await connectAnalyzeProgress(job_id);
+    } catch (err) {
+      console.error(err);
+      alert("解析に失敗しました");
+      if (!readSingleAnalysisCache()?.jobId) {
+        clearSingleAnalysisCache();
+        analyzeRequestInFlightRef.current = false;
+        setIsAnalyzing(false);
+      }
+    } finally {
+      if (!analyzeRequestInFlightRef.current) {
+        setIsAnalyzing(false);
+      }
+    }
   };
 
   const handleAiPromptChange = (e) => {
@@ -322,7 +492,7 @@ function App({ user }) {
      ★ 変更: AIコーチ (支払いフローへ)
   ===================== */
   const handlePurchaseAI = async () => {
-    if (!videoURL) return;
+    if (!videoURL || checkoutRequestInFlightRef.current) return;
     if (FREE_ACCESS_EFFECTIVE || freeAccessServer) {
       await handleEntitledAI();
       return;
@@ -335,6 +505,7 @@ function App({ user }) {
       await handleEntitledAI();
       return;
     }
+    checkoutRequestInFlightRef.current = true;
     setIsCheckingOut(true);
 
     try {
@@ -376,6 +547,7 @@ function App({ user }) {
       alert("決済の開始に失敗しました");
     } finally {
       setIsCheckingOut(false);
+      checkoutRequestInFlightRef.current = false;
     }
   };
 
@@ -419,14 +591,14 @@ function App({ user }) {
 
         <button
           onClick={handleAnalyze}
-          disabled={!selectedFile}
+          disabled={!selectedFile || isAnalyzing}
           style={{
             ...styles.primaryButton,
             ...(isMobile ? styles.primaryButtonMobile : {}),
-            background: selectedFile
+            background: selectedFile && !isAnalyzing
               ? "linear-gradient(90deg,#22c55e,#16a34a)"
               : "#64748b",
-            cursor: selectedFile ? "pointer" : "not-allowed",
+            cursor: selectedFile && !isAnalyzing ? "pointer" : "not-allowed",
           }}
         >
           解析する
