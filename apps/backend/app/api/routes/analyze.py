@@ -2,6 +2,7 @@ import asyncio
 import json
 import tempfile
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, File, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -19,7 +20,11 @@ analyzer = SwingAnalyzer()
 
 async def _save_upload_to_temp(upload: UploadFile) -> str:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-        tmp.write(await upload.read())
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            tmp.write(chunk)
         return tmp.name
 
 
@@ -29,6 +34,14 @@ def _set_error(job_id: str, exc: Exception) -> None:
         "progress": 0,
         "message": str(exc),
     }
+
+
+def _set_progress(job_id: str, progress: int, message: str) -> None:
+    state = progress_store.get(job_id) or {"status": "processing"}
+    state["status"] = "processing"
+    state["progress"] = progress
+    state["message"] = message
+    progress_store[job_id] = state
 
 
 @router.post("/single")
@@ -47,23 +60,28 @@ async def analyze_single(video: UploadFile = File(...)):
     progress_store[job_id] = {
         "status": "processing",
         "progress": 0,
+        "message": "アップロードを準備中",
     }
 
     input_path = await _save_upload_to_temp(video)
-
-    ffmpeg_to_cfr(
-        input_path=input_path,
-        output_path=src_path,
-        fps=30,
-    )
+    _set_progress(job_id, 3, "解析ジョブを開始しました")
 
     def sync_run():
         try:
+            _set_progress(job_id, 8, "動画形式を最適化中")
+            ffmpeg_to_cfr(
+                input_path=input_path,
+                output_path=src_path,
+                fps=30,
+            )
+            _set_progress(job_id, 25, "スイングの特徴を抽出中")
             df = analyzer.extract_metrics(src_path)
             df.to_csv(str(data_path))
+            _set_progress(job_id, 55, "解析動画を生成中")
 
             def progress_cb(p: int):
-                progress_store[job_id]["progress"] = p
+                hud_progress = 55 + int((p / 100) * 40)
+                _set_progress(job_id, hud_progress, "解析動画を生成中")
 
             events, fps = analyzer.render_hud(
                 src_path,
@@ -75,6 +93,7 @@ async def analyze_single(video: UploadFile = File(...)):
             progress_store[job_id] = {
                 "status": "done",
                 "progress": 100,
+                "message": "解析が完了しました",
                 "result": {
                     "fps": fps,
                     "events": {
@@ -89,6 +108,11 @@ async def analyze_single(video: UploadFile = File(...)):
             }
         except Exception as e:
             _set_error(job_id, e)
+        finally:
+            try:
+                Path(input_path).unlink(missing_ok=True)
+            except Exception:
+                pass
 
     asyncio.create_task(run_in_threadpool(sync_run))
     return {"job_id": job_id}

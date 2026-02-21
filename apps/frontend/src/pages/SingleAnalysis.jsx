@@ -2,13 +2,13 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { supabase } from "../lib/supabase";
 import useIsMobile from "../hooks/useIsMobile";
 import { trackEvent } from "../lib/analytics";
+import { API_BASE } from "../lib/apiBase";
 
 /* =====================
    環境変数（Vite）
 ===================== */
 import { FREE_ACCESS, SUPABASE_CONFIGURED } from "../lib/supabase";
 
-const API_BASE = import.meta.env.VITE_API_BASE;
 const FREE_ACCESS_EFFECTIVE = FREE_ACCESS || !SUPABASE_CONFIGURED;
 const MAX_AI_PROMPT_CHARS = 500;
 const MAX_CHAT_MESSAGES = 12;
@@ -60,6 +60,7 @@ function App({ user }) {
   const [events, setEvents] = useState(null);
   const [fps, setFps] = useState(30);
   const [progress, setProgress] = useState(0);
+  const [progressMessage, setProgressMessage] = useState("待機中");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
@@ -190,6 +191,9 @@ function App({ user }) {
         if (typeof data.progress === "number") {
           setProgress(data.progress);
         }
+        if (typeof data.message === "string" && data.message.trim()) {
+          setProgressMessage(data.message);
+        }
 
         if (data.status === "done") {
           closeAnalyzeEventSource();
@@ -203,6 +207,7 @@ function App({ user }) {
           setEvents(data.result.events);
           setFps(data.result.fps);
           setProgress(100);
+          setProgressMessage("解析が完了しました");
           setIsAnalyzing(false);
           analyzeRequestInFlightRef.current = false;
           writeSingleAnalysisCache({
@@ -259,9 +264,11 @@ function App({ user }) {
       }
       setIsAnalyzing(true);
       setProgress(typeof cached.progress === "number" ? cached.progress : 0);
+      setProgressMessage("前回の解析を復元中");
       analyzeRequestInFlightRef.current = true;
       connectAnalyzeProgress(cached.jobId).catch((err) => {
         console.error(err);
+        setProgressMessage("前回解析の復元に失敗しました");
         setIsAnalyzing(false);
         analyzeRequestInFlightRef.current = false;
         alert("前回の解析状態を復元できませんでした");
@@ -435,6 +442,7 @@ function App({ user }) {
     setVideoURL(null);
     setEvents(null);
     setProgress(0);
+    setProgressMessage("待機中");
     setIsAnalyzing(false);
     setChatMessages([]);
   };
@@ -445,6 +453,7 @@ function App({ user }) {
     analyzeRequestInFlightRef.current = true;
     setIsAnalyzing(true);
     setProgress(0);
+    setProgressMessage("解析ジョブを作成中");
     clearSingleAnalysisCache();
     try {
       const form = new FormData();
@@ -458,6 +467,7 @@ function App({ user }) {
         throw new Error("analyze/single failed");
       }
       const { job_id } = await res.json();
+      setProgressMessage("解析を開始しました");
       writeSingleAnalysisCache({
         status: "processing",
         jobId: job_id,
@@ -648,6 +658,7 @@ function App({ user }) {
           <p style={{ ...styles.progressText, ...(isMobile ? styles.progressTextMobile : {}) }}>
             解析中… {progress}%
           </p>
+          <p style={{ ...styles.progressText, opacity: 0.85 }}>{progressMessage}</p>
         </div>
       )}
 

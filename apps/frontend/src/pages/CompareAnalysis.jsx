@@ -2,8 +2,8 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { supabase, FREE_ACCESS, SUPABASE_CONFIGURED } from "../lib/supabase";
 import useIsMobile from "../hooks/useIsMobile";
 import { trackEvent } from "../lib/analytics";
+import { API_BASE } from "../lib/apiBase";
 
-const API_BASE = import.meta.env.VITE_API_BASE;
 const FREE_ACCESS_EFFECTIVE = FREE_ACCESS || !SUPABASE_CONFIGURED;
 const MAX_AI_PROMPT_CHARS = 500;
 const MAX_CHAT_MESSAGES = 12;
@@ -69,6 +69,7 @@ function CompareAnalysis({ user }) {
   const [fpsB, setFpsB] = useState(30);
 
   const [progress, setProgress] = useState(0);
+  const [progressMessage, setProgressMessage] = useState("待機中");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
@@ -221,6 +222,9 @@ function CompareAnalysis({ user }) {
           }
           const combined = calcCompareProgress(progressARef.current, progressBRef.current);
           setProgress(combined);
+          if (typeof data.message === "string" && data.message.trim()) {
+            setProgressMessage(`${side === "left" ? "左" : "右"}: ${data.message}`);
+          }
           writeCompareProcessingCache({
             leftJobId: side === "left" ? jobId : readCompareAnalysisCache()?.left?.jobId,
             rightJobId: side === "right" ? jobId : readCompareAnalysisCache()?.right?.jobId,
@@ -299,6 +303,7 @@ function CompareAnalysis({ user }) {
       (cached.left?.jobId || cached.right?.jobId)
     ) {
       setIsAnalyzing(true);
+      setProgressMessage("前回の比較解析を復元中");
       analyzeRequestInFlightRef.current = true;
       const reconnect = [];
       if (cached.left?.jobId && !cached.left?.videoURL) {
@@ -343,6 +348,7 @@ function CompareAnalysis({ user }) {
         })
         .catch((err) => {
           console.error(err);
+          setProgressMessage("前回解析の復元に失敗しました");
           alert("前回の比較解析状態を復元できませんでした");
           clearCompareAnalysisCache();
           setIsAnalyzing(false);
@@ -468,6 +474,7 @@ function CompareAnalysis({ user }) {
     setVideoAURL(null);
     setEventsA(null);
     setProgress(0);
+    setProgressMessage("待機中");
     setIsAnalyzing(false);
     setChatMessages([]);
   };
@@ -490,6 +497,7 @@ function CompareAnalysis({ user }) {
     setVideoBURL(null);
     setEventsB(null);
     setProgress(0);
+    setProgressMessage("待機中");
     setIsAnalyzing(false);
     setChatMessages([]);
   };
@@ -505,6 +513,7 @@ function CompareAnalysis({ user }) {
 
     setIsAnalyzing(true);
     setProgress(0);
+    setProgressMessage("解析ジョブを作成中");
     setChatMessages([]);
     progressARef.current = 0;
     progressBRef.current = 0;
@@ -531,6 +540,7 @@ function CompareAnalysis({ user }) {
         createSingleJob(fileA),
         createSingleJob(fileB),
       ]);
+      setProgressMessage("比較解析を開始しました");
       writeCompareAnalysisCache({
         status: "processing",
         progress: 0,
@@ -574,6 +584,7 @@ function CompareAnalysis({ user }) {
       ]);
 
       setProgress(100);
+      setProgressMessage("比較解析が完了しました");
       trackEvent("analysis_completed", { mode: "compare" });
       const latest = readCompareAnalysisCache();
       if (latest) {
@@ -703,6 +714,7 @@ function CompareAnalysis({ user }) {
           <p style={{ ...styles.progressText, ...(isMobile ? styles.progressTextMobile : {}) }}>
             解析中… {progress}%
           </p>
+          <p style={{ ...styles.progressText, opacity: 0.85 }}>{progressMessage}</p>
         </div>
       )}
 
