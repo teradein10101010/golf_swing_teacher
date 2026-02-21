@@ -309,6 +309,8 @@ class SwingAnalyzer:
                 "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p",
                 "-c:v",
                 "libx264",
+                "-preset",
+                "veryfast",
                 "-profile:v",
                 "baseline",
                 "-level",

@@ -44,6 +44,8 @@ def ffmpeg_to_cfr(
         str(fps),
         "-c:v",
         "libx264",
+        "-preset",
+        "veryfast",
         "-pix_fmt",
         "yuv420p",
         "-movflags",
