@@ -6,7 +6,6 @@ const MENU_LINKS = [
   { to: "/terms", label: "利用規約" },
   { to: "/privacy", label: "プライバシーポリシー" },
   { to: "/contact", label: "お問い合わせ" },
-  { to: "/legal", label: "特定商取引法に基づく表記" },
 ];
 
 export default function MobileMenu() {

@@ -6,7 +6,6 @@ import CompareAnalysis from "./pages/CompareAnalysis";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
 import Terms from "./pages/Terms";
 import Contact from "./pages/Contact";
-import Legal from "./pages/Legal";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
 import MobileTabBar from "./components/MobileTabBar";
@@ -64,7 +63,6 @@ function AppLayout() {
           <Route path="/privacy" element={<PrivacyPolicy />} />
           <Route path="/terms" element={<Terms />} />
           <Route path="/contact" element={<Contact />} />
-          <Route path="/legal" element={<Legal />} />
         </Routes>
       </main>
 

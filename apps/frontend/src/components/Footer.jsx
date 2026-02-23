@@ -41,16 +41,6 @@ export default function Footer() {
         >
           お問い合わせ
         </Link>
-        <Link
-          to="/legal"
-          style={{
-            ...styles.navItem,
-            ...(isMobile ? styles.navItemMobile : {}),
-            ...(location.pathname === "/legal" ? styles.navActive : {}),
-          }}
-        >
-          特定商取引法に基づく表記
-        </Link>
       </nav>
       <div style={{ ...styles.note, ...(isMobile ? styles.noteMobile : {}) }}>
         © {new Date().getFullYear()} Golf Swing Analyzer

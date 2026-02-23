@@ -61,7 +61,7 @@ export default function PrivacyPolicy() {
       <section style={styles.section}>
         <h2 style={styles.heading}>7. お問い合わせ先</h2>
         <p style={styles.text}>
-          メールアドレス: support@example.com（実運用時に差し替えてください）
+          お問い合わせページのフォームよりご連絡ください。
         </p>
       </section>
 
