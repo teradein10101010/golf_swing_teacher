@@ -63,11 +63,19 @@ def _send_contact_email(name: str, email: str, message: str) -> None:
     msg.set_content(body)
 
     context = ssl.create_default_context()
-    with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
-        if smtp_starttls:
-            server.starttls(context=context)
-        server.login(smtp_user, smtp_password)
-        server.send_message(msg)
+    # Port 465 expects implicit SSL; 587 commonly uses STARTTLS.
+    if (not smtp_starttls) and smtp_port == 465:
+        with smtplib.SMTP_SSL(
+            smtp_host, smtp_port, context=context, timeout=15
+        ) as server:
+            server.login(smtp_user, smtp_password)
+            server.send_message(msg)
+    else:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+            if smtp_starttls:
+                server.starttls(context=context)
+            server.login(smtp_user, smtp_password)
+            server.send_message(msg)
 
 
 @router.post("/submit")
