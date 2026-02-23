@@ -6,6 +6,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes.analyze import router as analyze_router
 from app.api.routes.auth import router as auth_router
+from app.api.routes.contact import router as contact_router
 from app.api.routes.stripe import router as stripe_router
 from app.core.config import DATA_DIR, VIDEOS_DIR
 
@@ -35,3 +36,4 @@ app.mount("/data", StaticFiles(directory=DATA_DIR), name="data")
 app.include_router(auth_router)
 app.include_router(analyze_router)
 app.include_router(stripe_router)
+app.include_router(contact_router)
