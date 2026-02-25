@@ -34,7 +34,7 @@ export default function Contact() {
       }
       setStatus({
         type: "success",
-        text: "お問い合わせを送信しました。確認後、順次返信します。",
+        text: "お問い合わせを送信しました。",
       });
       setMessage("");
     } catch (err) {
@@ -122,10 +122,6 @@ export default function Contact() {
         </ul>
       </section>
 
-      <section style={styles.section}>
-        <h2 style={styles.heading}>返信の目安</h2>
-        <p style={styles.text}>原則として2営業日以内の返信を目指します。</p>
-      </section>
     </div>
   );
 }
