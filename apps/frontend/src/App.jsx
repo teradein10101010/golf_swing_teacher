@@ -31,6 +31,7 @@ function AppLayout() {
   const isMobile = useIsMobile();
   const location = useLocation();
   const showMobileTabBar = isMobile && ["/", "/compare"].includes(location.pathname);
+  const showBetaNotice = ["/", "/compare"].includes(location.pathname);
 
   useEffect(() => {
     initAnalytics();
@@ -57,6 +58,12 @@ function AppLayout() {
           ...(showMobileTabBar ? styles.pageMobileTabSpace : {}),
         }}
       >
+        {showBetaNotice && (
+          <div style={{ ...styles.betaNotice, ...(isMobile ? styles.betaNoticeMobile : {}) }}>
+            <strong>ベータ版のお知らせ:</strong> 現在は検証期間のためAI解析機能を無料で提供しています。
+            正式版では有料プランを導入する予定です。
+          </div>
+        )}
         <Routes>
           <Route path="/" element={<SingleAnalysis user={user} />} />
           <Route path="/compare" element={<CompareAnalysis user={user} />} />
@@ -96,5 +103,20 @@ const styles = {
   },
   pageMobileTabSpace: {
     paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 86px)",
+  },
+  betaNotice: {
+    marginBottom: 16,
+    padding: "10px 14px",
+    borderRadius: 12,
+    border: "1px solid rgba(250, 204, 21, 0.45)",
+    background: "rgba(250, 204, 21, 0.12)",
+    color: "#fef3c7",
+    fontSize: 14,
+    lineHeight: 1.5,
+  },
+  betaNoticeMobile: {
+    fontSize: 13,
+    padding: "9px 12px",
+    marginBottom: 12,
   },
 };
