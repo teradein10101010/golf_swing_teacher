@@ -1,5 +1,6 @@
 import os
 import time
+
 import httpx
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -47,14 +48,18 @@ def _get_jwks():
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ):
-    token = credentials.credentials
+    return verify_access_token(credentials.credentials)
 
+
+def verify_access_token(token: str):
     try:
         header = jwt.get_unverified_header(token)
         claims = jwt.get_unverified_claims(token)
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+    supabase_url = os.getenv("SUPABASE_URL")
+    expected_iss = f"{supabase_url}/auth/v1" if supabase_url else None
     alg = header.get("alg")
     kid = header.get("kid")
 
@@ -69,6 +74,10 @@ def get_current_user(
                 algorithms=["HS256"],
                 audience="authenticated",
             )
+            if expected_iss and payload.get("iss") != expected_iss:
+                raise HTTPException(status_code=401, detail="Invalid token")
+            if not payload.get("sub"):
+                raise HTTPException(status_code=401, detail="Invalid token")
             return payload
         except JWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
@@ -93,8 +102,12 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="Token expired")
     if claims.get("aud") != "authenticated":
         raise HTTPException(status_code=401, detail="Invalid token")
+    if expected_iss and claims.get("iss") != expected_iss:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if not claims.get("sub"):
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-    return claims  # user_id, email などが入っている
+    return claims
 
 
 def get_current_user_optional(
@@ -104,4 +117,12 @@ def get_current_user_optional(
         if FREE_ACCESS:
             return None
         raise HTTPException(status_code=401, detail="Missing token")
+    return get_current_user(credentials)
+
+
+def get_current_user_if_present(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_optional),
+):
+    if credentials is None:
+        return None
     return get_current_user(credentials)
