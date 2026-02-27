@@ -1,18 +1,23 @@
 import hashlib
+import logging
 import os
 import time
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.core.auth import get_current_user, get_current_user_optional
+from app.core.actor import actor_key_for_anonymous, actor_key_for_user, get_anonymous_id_from_request
+from app.core.auth import get_current_user_optional
 from app.core.config import DATA_DIR, FREE_ACCESS, VIDEOS_DIR
+from app.core.media_access import assert_asset_owner_any, reassign_asset_owner
+from app.core.rate_limit import enforce_rate_limit
 from app.services.swing_analyzer import (
     MAX_CHAT_MESSAGES,
     MAX_USER_PROMPT_CHARS,
@@ -26,6 +31,7 @@ stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
 YOUR_DOMAIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173")
 
 analyzer = SwingAnalyzer()
+logger = logging.getLogger(__name__)
 
 checkout_session_cache = {}
 CHECKOUT_SESSION_TTL_SEC = 15 * 60
@@ -101,10 +107,50 @@ def _csv_for_video(video_file_path: Path) -> Path | None:
     return DATA_DIR / f"data_{job_id}.csv"
 
 
+def _extract_video_filename(video_path: str) -> str:
+    raw = (video_path or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="video_path is required")
+    parsed = urlparse(raw)
+    candidate_path = parsed.path if parsed.path else raw
+    filename = Path(candidate_path).name
+    if not filename:
+        raise HTTPException(status_code=400, detail="Invalid video_path")
+    return filename
+
+
+def _resolve_owned_video_path(
+    video_path: str,
+    user_id: str | None = None,
+    anonymous_id: str | None = None,
+    require_user: bool = True,
+) -> tuple[Path, str]:
+    if require_user and not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    filename = _extract_video_filename(video_path)
+    allowed: list[str] = []
+    if user_id:
+        allowed.append(actor_key_for_user(user_id))
+    if anonymous_id:
+        allowed.append(actor_key_for_anonymous(anonymous_id))
+    if not allowed:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    assert_asset_owner_any(filename, allowed)
+    resolved = VIDEOS_DIR / filename
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail="Video file not found")
+    return resolved, filename
+
+
 @router.post("/create-checkout-session")
 async def create_checkout_session(
     request: Request, user=Depends(get_current_user_optional)
 ):
+    enforce_rate_limit(
+        key=f"checkout:{request.client.host if request.client else 'unknown'}:{user['sub'] if user else 'anonymous'}",
+        limit=10,
+        window_seconds=60,
+    )
     try:
         if FREE_ACCESS:
             return {"already_paid": True}
@@ -112,8 +158,13 @@ async def create_checkout_session(
             raise HTTPException(status_code=401, detail="Authentication required")
         data = await request.json()
         video_path = data.get("video_path", "")
-        if not video_path:
-            raise HTTPException(status_code=400, detail="video_path is required")
+        anonymous_id = get_anonymous_id_from_request(request)
+        _, filename = _resolve_owned_video_path(
+            video_path,
+            user_id=user["sub"],
+            anonymous_id=anonymous_id,
+        )
+        reassign_asset_owner(filename, actor_key_for_user(user["sub"]))
         if _is_entitled(user["sub"]):
             return {"already_paid": True}
 
@@ -159,12 +210,22 @@ async def create_checkout_session(
         }
 
         return {"url": checkout_session.url}
-    except Exception as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to create checkout session")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "決済セッションの作成に失敗しました"},
+        )
 
 
 @router.post("/analyze/ai-paid")
-async def analyze_ai_paid(req: AIPaidRequest, user=Depends(get_current_user_optional)):
+async def analyze_ai_paid(
+    req: AIPaidRequest,
+    request: Request,
+    user=Depends(get_current_user_optional),
+):
     session_id = req.session_id
     video_url_path = req.video_path
 
@@ -189,16 +250,15 @@ async def analyze_ai_paid(req: AIPaidRequest, user=Depends(get_current_user_opti
                 status_code=400, content={"error": "無効なセッションです"}
             )
 
-    if not video_url_path:
-        raise HTTPException(status_code=400, detail="video_path is required")
-
-    filename = Path(video_url_path).name
-    video_file_path = VIDEOS_DIR / filename
-
-    if not video_file_path.exists():
-        raise HTTPException(
-            status_code=404, detail=f"Video file not found: {video_file_path}"
-        )
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    anonymous_id = get_anonymous_id_from_request(request)
+    video_file_path, filename = _resolve_owned_video_path(
+        video_url_path,
+        user_id=user["sub"],
+        anonymous_id=anonymous_id,
+    )
+    reassign_asset_owner(filename, actor_key_for_user(user["sub"]))
 
     csv_path = _csv_for_video(video_file_path)
     advice_text = analyzer.analyze_video(
@@ -226,15 +286,24 @@ def ai_entitlement(user=Depends(get_current_user_optional)):
 
 
 @router.post("/analyze/ai-entitled")
-def analyze_ai_entitled(req: AIRequest, user=Depends(get_current_user_optional)):
+def analyze_ai_entitled(
+    req: AIRequest,
+    request: Request,
+    user=Depends(get_current_user_optional),
+):
     if not FREE_ACCESS:
         if not user:
             raise HTTPException(status_code=401, detail="Authentication required")
         if not _is_entitled(user["sub"]):
             raise HTTPException(status_code=403, detail="Not entitled")
-    video_path = VIDEOS_DIR / Path(req.video_path).name
-    if not video_path.exists():
-        raise HTTPException(status_code=404, detail="Video file not found")
+
+    anonymous_id = get_anonymous_id_from_request(request)
+    video_path, _ = _resolve_owned_video_path(
+        req.video_path,
+        user_id=user["sub"] if user else None,
+        anonymous_id=anonymous_id,
+        require_user=not FREE_ACCESS,
+    )
     csv_path = _csv_for_video(video_path)
     advice = analyzer.analyze_video(
         video_path,
@@ -250,7 +319,9 @@ def analyze_ai_entitled(req: AIRequest, user=Depends(get_current_user_optional))
 
 @router.post("/analyze/ai-compare-entitled")
 def analyze_ai_compare_entitled(
-    req: AICompareRequest, user=Depends(get_current_user_optional)
+    req: AICompareRequest,
+    request: Request,
+    user=Depends(get_current_user_optional),
 ):
     if not FREE_ACCESS:
         if not user:
@@ -258,12 +329,19 @@ def analyze_ai_compare_entitled(
         if not _is_entitled(user["sub"]):
             raise HTTPException(status_code=403, detail="Not entitled")
 
-    left_video_path = VIDEOS_DIR / Path(req.left_video_path).name
-    right_video_path = VIDEOS_DIR / Path(req.right_video_path).name
-    if not left_video_path.exists():
-        raise HTTPException(status_code=404, detail="Left video file not found")
-    if not right_video_path.exists():
-        raise HTTPException(status_code=404, detail="Right video file not found")
+    anonymous_id = get_anonymous_id_from_request(request)
+    left_video_path, _ = _resolve_owned_video_path(
+        req.left_video_path,
+        user_id=user["sub"] if user else None,
+        anonymous_id=anonymous_id,
+        require_user=not FREE_ACCESS,
+    )
+    right_video_path, _ = _resolve_owned_video_path(
+        req.right_video_path,
+        user_id=user["sub"] if user else None,
+        anonymous_id=anonymous_id,
+        require_user=not FREE_ACCESS,
+    )
 
     advice = analyzer.analyze_comparison_videos(
         left_video_path,

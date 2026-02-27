@@ -3,6 +3,7 @@ import { supabase, FREE_ACCESS, SUPABASE_CONFIGURED } from "../lib/supabase";
 import useIsMobile from "../hooks/useIsMobile";
 import { trackEvent } from "../lib/analytics";
 import { API_BASE } from "../lib/apiBase";
+import { getAnonymousId } from "../lib/anonymousId";
 
 const FREE_ACCESS_EFFECTIVE = FREE_ACCESS || !SUPABASE_CONFIGURED;
 const MAX_AI_PROMPT_CHARS = 500;
@@ -190,9 +191,14 @@ function CompareAnalysis({ user }) {
     });
   };
 
-  const connectCompareProgress = ({ side, jobId, onDone }) =>
+  const connectCompareProgress = ({ side, jobId, onDone, accessToken, anonymousId }) =>
     new Promise((resolve, reject) => {
-      const es = new EventSource(`${API_BASE}/api/analyze/progress/${jobId}`);
+      const qs = new URLSearchParams();
+      if (accessToken) qs.set("token", accessToken);
+      if (!accessToken && anonymousId) qs.set("anonymous_id", anonymousId);
+      const es = new EventSource(
+        `${API_BASE}/api/analyze/progress/${jobId}?${qs.toString()}`,
+      );
       if (side === "left") {
         if (analyzeEventSourceARef.current) analyzeEventSourceARef.current.close();
         analyzeEventSourceARef.current = es;
@@ -281,6 +287,68 @@ function CompareAnalysis({ user }) {
     });
 
   useEffect(() => {
+    let cancelled = false;
+    const reconnectWithToken = async (cached) => {
+      const { data } = await supabase.auth.getSession();
+      const accessToken = data.session?.access_token;
+      const anonymousId = getAnonymousId();
+      const reconnect = [];
+      if (cached.left?.jobId && !cached.left?.videoURL) {
+        reconnect.push(
+          connectCompareProgress({
+            side: "left",
+            jobId: cached.left.jobId,
+            accessToken,
+            anonymousId,
+            onDone: (r) => {
+              setVideoAURL(API_BASE + r.video_url);
+              setEventsA(r.events);
+              setFpsA(r.fps);
+            },
+          }),
+        );
+      }
+      if (cached.right?.jobId && !cached.right?.videoURL) {
+        reconnect.push(
+          connectCompareProgress({
+            side: "right",
+            jobId: cached.right.jobId,
+            accessToken,
+            anonymousId,
+            onDone: (r) => {
+              setVideoBURL(API_BASE + r.video_url);
+              setEventsB(r.events);
+              setFpsB(r.fps);
+            },
+          }),
+        );
+      }
+      return Promise.all(reconnect)
+        .then(() => {
+          if (cancelled) return;
+          const latest = readCompareAnalysisCache();
+          if (latest?.left?.videoURL && latest?.right?.videoURL) {
+            writeCompareAnalysisCache({
+              ...latest,
+              status: "done",
+              progress: 100,
+            });
+          }
+          setProgress(100);
+          setIsAnalyzing(false);
+          analyzeRequestInFlightRef.current = false;
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          console.error(err);
+          setProgressMessage("前回解析の復元に失敗しました");
+          alert("前回の比較解析状態を復元できませんでした");
+          clearCompareAnalysisCache();
+          setIsAnalyzing(false);
+          analyzeRequestInFlightRef.current = false;
+        });
+    };
+
     const cached = readCompareAnalysisCache();
     if (!cached) return;
 
@@ -305,56 +373,11 @@ function CompareAnalysis({ user }) {
       setIsAnalyzing(true);
       setProgressMessage("前回の比較解析を復元中");
       analyzeRequestInFlightRef.current = true;
-      const reconnect = [];
-      if (cached.left?.jobId && !cached.left?.videoURL) {
-        reconnect.push(
-          connectCompareProgress({
-            side: "left",
-            jobId: cached.left.jobId,
-            onDone: (r) => {
-              setVideoAURL(API_BASE + r.video_url);
-              setEventsA(r.events);
-              setFpsA(r.fps);
-            },
-          }),
-        );
-      }
-      if (cached.right?.jobId && !cached.right?.videoURL) {
-        reconnect.push(
-          connectCompareProgress({
-            side: "right",
-            jobId: cached.right.jobId,
-            onDone: (r) => {
-              setVideoBURL(API_BASE + r.video_url);
-              setEventsB(r.events);
-              setFpsB(r.fps);
-            },
-          }),
-        );
-      }
-      Promise.all(reconnect)
-        .then(() => {
-          const latest = readCompareAnalysisCache();
-          if (latest?.left?.videoURL && latest?.right?.videoURL) {
-            writeCompareAnalysisCache({
-              ...latest,
-              status: "done",
-              progress: 100,
-            });
-          }
-          setProgress(100);
-          setIsAnalyzing(false);
-          analyzeRequestInFlightRef.current = false;
-        })
-        .catch((err) => {
-          console.error(err);
-          setProgressMessage("前回解析の復元に失敗しました");
-          alert("前回の比較解析状態を復元できませんでした");
-          clearCompareAnalysisCache();
-          setIsAnalyzing(false);
-          analyzeRequestInFlightRef.current = false;
-        });
+      reconnectWithToken(cached);
     }
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(
@@ -405,10 +428,11 @@ function CompareAnalysis({ user }) {
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          "X-Anonymous-Id": getAnonymousId(),
         },
         body: JSON.stringify({
-          left_video_path: videoAURL.replace(API_BASE, ""),
-          right_video_path: videoBURL.replace(API_BASE, ""),
+          left_video_path: videoAURL,
+          right_video_path: videoBURL,
           ai_prompt: aiPrompt.slice(0, MAX_AI_PROMPT_CHARS).trim(),
           ai_messages: nextMessages,
         }),
@@ -519,12 +543,20 @@ function CompareAnalysis({ user }) {
     progressBRef.current = 0;
     clearCompareAnalysisCache();
 
+    const { data } = await supabase.auth.getSession();
+    const accessToken = data.session?.access_token;
+    const anonymousId = getAnonymousId();
+
     const createSingleJob = async (file) => {
       const form = new FormData();
       form.append("video", file);
 
       const res = await fetch(`${API_BASE}/api/analyze/single`, {
         method: "POST",
+        headers: {
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          "X-Anonymous-Id": anonymousId,
+        },
         body: form,
       });
       if (!res.ok) {
@@ -564,6 +596,8 @@ function CompareAnalysis({ user }) {
         connectCompareProgress({
           side: "left",
           jobId: leftJobId,
+          accessToken,
+          anonymousId,
           onDone: (r) => {
             const fullURL = API_BASE + r.video_url;
             setVideoAURL(fullURL);
@@ -574,6 +608,8 @@ function CompareAnalysis({ user }) {
         connectCompareProgress({
           side: "right",
           jobId: rightJobId,
+          accessToken,
+          anonymousId,
           onDone: (r) => {
             const fullURL = API_BASE + r.video_url;
             setVideoBURL(fullURL);

@@ -1,38 +1,71 @@
 import asyncio
 import json
+import logging
 import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
+from app.core.actor import (
+    actor_key_for_anonymous,
+    actor_key_for_user,
+    get_anonymous_id_from_request,
+    normalize_anonymous_id,
+)
+from app.core.auth import get_current_user_if_present, verify_access_token
 from app.core.config import DATA_DIR, VIDEOS_DIR
+from app.core.media_access import issue_media_token, register_asset_owner
 from app.core.progress import progress_store
+from app.core.rate_limit import enforce_rate_limit
 from app.services.swing_analyzer import SwingAnalyzer
 from app.utils.ffmpeg import ffmpeg_to_cfr
 
 router = APIRouter(prefix="/api/analyze")
 
 analyzer = SwingAnalyzer()
+logger = logging.getLogger(__name__)
+job_owner: dict[str, str] = {}
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+ALLOWED_VIDEO_TYPES = {
+    "video/mp4",
+    "video/quicktime",
+    "video/x-m4v",
+    "application/octet-stream",
+}
 
 
 async def _save_upload_to_temp(upload: UploadFile) -> str:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            tmp.write(chunk)
-        return tmp.name
+    if upload.content_type not in ALLOWED_VIDEO_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported video format")
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+            tmp_path = tmp.name
+            total_size = 0
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Video file is too large")
+                tmp.write(chunk)
+            return tmp.name
+    except Exception:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
+        raise
 
 
 def _set_error(job_id: str, exc: Exception) -> None:
+    logger.exception("Analyze job failed (job_id=%s): %s", job_id, exc)
     progress_store[job_id] = {
         "status": "error",
         "progress": 0,
-        "message": str(exc),
+        "message": "解析中にエラーが発生しました",
     }
 
 
@@ -44,9 +77,62 @@ def _set_progress(job_id: str, progress: int, message: str) -> None:
     progress_store[job_id] = state
 
 
+def _make_media_video_url(filename: str) -> str:
+    token = issue_media_token(filename=filename, media_kind="video")
+    return f"/api/media/videos/{filename}?token={token}"
+
+
+def _sanitize_progress_payload(data: dict) -> dict:
+    return {k: v for k, v in data.items() if not k.startswith("_")}
+
+
+def _extract_bearer_token(request: Request) -> str | None:
+    auth = request.headers.get("authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return None
+    token = auth[7:].strip()
+    return token or None
+
+
+def _resolve_actor(request: Request, user: dict | None) -> tuple[str, str]:
+    if user and user.get("sub"):
+        user_id = str(user["sub"])
+        return actor_key_for_user(user_id), user_id
+
+    anonymous_id = get_anonymous_id_from_request(request)
+    if not anonymous_id:
+        raise HTTPException(status_code=401, detail="Authentication or anonymous id required")
+    return actor_key_for_anonymous(anonymous_id), f"anon:{anonymous_id}"
+
+
+def _resolve_progress_actor(request: Request, token: str | None, anonymous_id: str | None) -> str:
+    bearer = _extract_bearer_token(request)
+    if bearer:
+        user = verify_access_token(bearer)
+        return actor_key_for_user(str(user["sub"]))
+    if token:
+        user = verify_access_token(token)
+        return actor_key_for_user(str(user["sub"]))
+    normalized_anon = normalize_anonymous_id(anonymous_id)
+    if normalized_anon:
+        return actor_key_for_anonymous(normalized_anon)
+    raise HTTPException(status_code=401, detail="Authentication or anonymous id required")
+
+
 @router.post("/single")
-async def analyze_single(video: UploadFile = File(...)):
+async def analyze_single(
+    request: Request,
+    video: UploadFile = File(...),
+    user=Depends(get_current_user_if_present),
+):
+    actor_key, rate_limiter_actor = _resolve_actor(request, user)
+    enforce_rate_limit(
+        key=f"analyze:single:{rate_limiter_actor}:{request.client.host if request.client else 'unknown'}",
+        limit=6,
+        window_seconds=60,
+    )
     job_id = uuid.uuid4().hex
+    job_owner[job_id] = actor_key
 
     src_name = f"src_{job_id}.mp4"
     src_path = VIDEOS_DIR / src_name
@@ -89,6 +175,9 @@ async def analyze_single(video: UploadFile = File(...)):
                 str(hud_path),
                 progress_cb=progress_cb,
             )
+            register_asset_owner(src_name, actor_key)
+            register_asset_owner(hud_name, actor_key)
+            register_asset_owner(data_name, actor_key)
 
             progress_store[job_id] = {
                 "status": "done",
@@ -102,8 +191,8 @@ async def analyze_single(video: UploadFile = File(...)):
                         "impact": int(events["Impact"]),
                         "finish": int(events["Finish"]),
                     },
-                    "source_video_url": f"/videos/{src_name}",
-                    "video_url": f"/videos/{hud_name}",
+                    "source_video_url": _make_media_video_url(src_name),
+                    "video_url": _make_media_video_url(hud_name),
                 },
             }
         except Exception as e:
@@ -119,17 +208,31 @@ async def analyze_single(video: UploadFile = File(...)):
 
 
 @router.post("/compare")
-async def analyze_compare(left: UploadFile = File(...), right: UploadFile = File(...)):
+async def analyze_compare(
+    request: Request,
+    left: UploadFile = File(...),
+    right: UploadFile = File(...),
+    user=Depends(get_current_user_if_present),
+):
+    actor_key, rate_limiter_actor = _resolve_actor(request, user)
+    enforce_rate_limit(
+        key=f"analyze:compare:{rate_limiter_actor}:{request.client.host if request.client else 'unknown'}",
+        limit=4,
+        window_seconds=60,
+    )
     job_id = uuid.uuid4().hex
+    job_owner[job_id] = actor_key
     progress_store[job_id] = {"status": "processing", "progress": 0}
 
-    with tempfile.NamedTemporaryFile(
-        delete=False, suffix=".mp4"
-    ) as f1, tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as f2:
-        f1.write(await left.read())
-        f2.write(await right.read())
-        left_path = f1.name
-        right_path = f2.name
+    left_path = None
+    right_path = None
+    try:
+        left_path = await _save_upload_to_temp(left)
+        right_path = await _save_upload_to_temp(right)
+    except Exception:
+        if left_path:
+            Path(left_path).unlink(missing_ok=True)
+        raise
 
     def sync_run():
         try:
@@ -151,18 +254,20 @@ async def analyze_compare(left: UploadFile = File(...), right: UploadFile = File
             ev_r, fps_r = analyzer.render_hud(
                 right_path, df_r, str(r_path), progress_cb=cb
             )
+            register_asset_owner(l_name, actor_key)
+            register_asset_owner(r_name, actor_key)
 
             progress_store[job_id] = {
                 "status": "done",
                 "progress": 100,
                 "result": {
                     "left": {
-                        "video_url": f"/videos/{l_name}",
+                        "video_url": _make_media_video_url(l_name),
                         "events": {k.lower(): int(v) for k, v in ev_l.items()},
                         "fps": fps_l,
                     },
                     "right": {
-                        "video_url": f"/videos/{r_name}",
+                        "video_url": _make_media_video_url(r_name),
                         "events": {k.lower(): int(v) for k, v in ev_r.items()},
                         "fps": fps_r,
                     },
@@ -170,13 +275,25 @@ async def analyze_compare(left: UploadFile = File(...), right: UploadFile = File
             }
         except Exception as e:
             _set_error(job_id, e)
+        finally:
+            Path(left_path).unlink(missing_ok=True)
+            Path(right_path).unlink(missing_ok=True)
 
     asyncio.create_task(run_in_threadpool(sync_run))
     return {"job_id": job_id}
 
 
 @router.get("/progress/{job_id}")
-async def analyze_progress(job_id: str):
+async def analyze_progress(
+    job_id: str,
+    request: Request,
+    token: str | None = Query(None),
+    anonymous_id: str | None = Query(None),
+):
+    actor_key = _resolve_progress_actor(request, token, anonymous_id)
+    if job_owner.get(job_id) != actor_key:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     async def event_generator():
         while True:
             data = progress_store.get(job_id)
@@ -185,7 +302,7 @@ async def analyze_progress(job_id: str):
                 yield f"data: {json.dumps({'status':'not_found'})}\n\n"
                 break
 
-            yield f"data: {json.dumps(data)}\n\n"
+            yield f"data: {json.dumps(_sanitize_progress_payload(data))}\n\n"
 
             if data.get("status") in ("done", "error"):
                 break

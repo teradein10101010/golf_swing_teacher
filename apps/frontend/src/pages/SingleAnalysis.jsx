@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabase";
 import useIsMobile from "../hooks/useIsMobile";
 import { trackEvent } from "../lib/analytics";
 import { API_BASE } from "../lib/apiBase";
+import { getAnonymousId } from "../lib/anonymousId";
 
 /* =====================
    環境変数（Vite）
@@ -96,7 +97,10 @@ function App({ user }) {
         return;
       }
       // 支払い成功として戻ってきた場合
-      setVideoURL(API_BASE + videoPathParams);
+      const restoredVideoUrl = /^https?:\/\//.test(videoPathParams)
+        ? videoPathParams
+        : API_BASE + videoPathParams;
+      setVideoURL(restoredVideoUrl);
       // ここで本来はjob_id等を使ってeventsデータも再取得するのがベスト
       // 簡易的にAI解析を即実行する
       verifyPaymentAndRunAI(sessionId, videoPathParams);
@@ -170,10 +174,15 @@ function App({ user }) {
     analyzeEventSourceRef.current = null;
   };
 
-  const connectAnalyzeProgress = (jobId) =>
+  const connectAnalyzeProgress = ({ jobId, accessToken, anonymousId }) =>
     new Promise((resolve, reject) => {
       closeAnalyzeEventSource();
-      const es = new EventSource(`${API_BASE}/api/analyze/progress/${jobId}`);
+      const qs = new URLSearchParams();
+      if (accessToken) qs.set("token", accessToken);
+      if (!accessToken && anonymousId) qs.set("anonymous_id", anonymousId);
+      const es = new EventSource(
+        `${API_BASE}/api/analyze/progress/${jobId}?${qs.toString()}`,
+      );
       analyzeEventSourceRef.current = es;
 
       es.onmessage = (e) => {
@@ -246,6 +255,21 @@ function App({ user }) {
     });
 
   useEffect(() => {
+    let cancelled = false;
+    const restoreCachedJob = async () => {
+      const { data } = await supabase.auth.getSession();
+      const accessToken = data.session?.access_token;
+      const anonymousId = getAnonymousId();
+      connectAnalyzeProgress({ jobId: cached.jobId, accessToken, anonymousId }).catch((err) => {
+        if (cancelled) return;
+        console.error(err);
+        setProgressMessage("前回解析の復元に失敗しました");
+        setIsAnalyzing(false);
+        analyzeRequestInFlightRef.current = false;
+        alert("前回の解析状態を復元できませんでした");
+      });
+    };
+
     const cached = readSingleAnalysisCache();
     if (!cached) return;
 
@@ -266,14 +290,11 @@ function App({ user }) {
       setProgress(typeof cached.progress === "number" ? cached.progress : 0);
       setProgressMessage("前回の解析を復元中");
       analyzeRequestInFlightRef.current = true;
-      connectAnalyzeProgress(cached.jobId).catch((err) => {
-        console.error(err);
-        setProgressMessage("前回解析の復元に失敗しました");
-        setIsAnalyzing(false);
-        analyzeRequestInFlightRef.current = false;
-        alert("前回の解析状態を復元できませんでした");
-      });
+      restoreCachedJob();
     }
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(
@@ -315,6 +336,7 @@ function App({ user }) {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          "X-Anonymous-Id": getAnonymousId(),
         },
         body: JSON.stringify({
           session_id: sessionId,
@@ -385,9 +407,10 @@ function App({ user }) {
         headers: {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          "X-Anonymous-Id": getAnonymousId(),
         },
         body: JSON.stringify({
-          video_path: videoURL.replace(API_BASE, ""),
+          video_path: videoURL,
           ai_prompt: aiPrompt.slice(0, MAX_AI_PROMPT_CHARS).trim(),
           ai_messages: nextMessages,
         }),
@@ -456,11 +479,21 @@ function App({ user }) {
     setProgressMessage("解析ジョブを作成中");
     clearSingleAnalysisCache();
     try {
+      const { data } = await supabase.auth.getSession();
+      const accessToken = data.session?.access_token;
+      const anonymousId = getAnonymousId();
+      if (!accessToken) {
+        // anonymous mode is allowed
+      }
       const form = new FormData();
       form.append("video", selectedFile);
 
       const res = await fetch(`${API_BASE}/api/analyze/single`, {
         method: "POST",
+        headers: {
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          "X-Anonymous-Id": anonymousId,
+        },
         body: form,
       });
       if (!res.ok) {
@@ -474,7 +507,7 @@ function App({ user }) {
         progress: 0,
         originalVideoURL: originalVideoURL || null,
       });
-      await connectAnalyzeProgress(job_id);
+      await connectAnalyzeProgress({ jobId: job_id, accessToken, anonymousId });
       trackEvent("analysis_completed", { mode: "single" });
     } catch (err) {
       console.error(err);
@@ -552,10 +585,11 @@ function App({ user }) {
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
+          "X-Anonymous-Id": getAnonymousId(),
         },
         body: JSON.stringify({
           // 戻ってきた時に動画を表示できるようにパスを送る
-          video_path: videoURL.replace(API_BASE, ""),
+          video_path: videoURL,
         }),
       });
 
