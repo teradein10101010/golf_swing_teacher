@@ -2,12 +2,16 @@ import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import useIsMobile from "../hooks/useIsMobile";
 import { trackEvent } from "../lib/analytics";
+import { API_BASE } from "../lib/apiBase";
 
 export default function Auth({ onUserChange }) {
   const [user, setUser] = useState(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [isEntitled, setIsEntitled] = useState(false);
+  const [isEntitlementLoading, setIsEntitlementLoading] = useState(false);
+  const [isCanceling, setIsCanceling] = useState(false);
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -25,6 +29,80 @@ export default function Auth({ onUserChange }) {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setIsEntitled(false);
+      setIsEntitlementLoading(false);
+      return;
+    }
+
+    let active = true;
+    const run = async () => {
+      setIsEntitlementLoading(true);
+      try {
+        const { data } = await supabase.auth.getSession();
+        const token = data.session?.access_token;
+        if (!token) {
+          if (active) setIsEntitled(false);
+          return;
+        }
+        const res = await fetch(`${API_BASE}/api/ai/entitlement`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const result = await res.json();
+        if (active) {
+          setIsEntitled(Boolean(result.entitled));
+        }
+      } catch (err) {
+        console.error("fetchEntitlement failed", err);
+        if (active) {
+          setIsEntitled(false);
+        }
+      } finally {
+        if (active) {
+          setIsEntitlementLoading(false);
+        }
+      }
+    };
+
+    run();
+    return () => {
+      active = false;
+    };
+  }, [user]);
+
+  const handleCancelSubscription = async () => {
+    if (!user || !isEntitled || isCanceling) return;
+    if (!window.confirm("サブスクリプションを解約します。よろしいですか？")) return;
+
+    setIsCanceling(true);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) {
+        alert("ログインしてください");
+        return;
+      }
+      const res = await fetch(`${API_BASE}/api/subscription/cancel`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        throw new Error(result.detail || "cancel failed");
+      }
+      setIsEntitled(false);
+      alert("サブスクリプションを解約しました");
+    } catch (err) {
+      console.error(err);
+      alert("サブスクリプションの解約に失敗しました");
+    } finally {
+      setIsCanceling(false);
+    }
+  };
 
   const login = async () => {
     setLoading(true);
@@ -59,7 +137,26 @@ export default function Auth({ onUserChange }) {
   if (user) {
     return (
       <div style={{ ...styles.userBox, ...(isMobile ? styles.userBoxMobile : {}) }}>
-        <span style={{ fontSize: 13 }}>{user.email}</span>
+        <div style={styles.accountMeta}>
+          <span style={{ fontSize: 13 }}>{user.email}</span>
+          <span
+            style={{
+              ...styles.statusBadge,
+              ...(isEntitled ? styles.statusPaid : styles.statusFree),
+            }}
+          >
+            {isEntitlementLoading ? "確認中" : isEntitled ? "課金中" : "未課金"}
+          </span>
+        </div>
+        {isEntitled && (
+          <button
+            style={{ ...styles.cancel, ...(isMobile ? styles.actionMobile : {}) }}
+            onClick={handleCancelSubscription}
+            disabled={isCanceling}
+          >
+            {isCanceling ? "解約中..." : "解約"}
+          </button>
+        )}
         <button
           style={{ ...styles.logout, ...(isMobile ? styles.actionMobile : {}) }}
           onClick={() => {
@@ -150,6 +247,35 @@ const styles = {
     display: "flex",
     gap: 12,
     alignItems: "center",
+  },
+  accountMeta: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+  },
+  statusBadge: {
+    fontSize: 12,
+    padding: "4px 10px",
+    borderRadius: 999,
+    border: "1px solid transparent",
+  },
+  statusPaid: {
+    background: "rgba(34, 197, 94, 0.16)",
+    borderColor: "rgba(34, 197, 94, 0.35)",
+    color: "#bbf7d0",
+  },
+  statusFree: {
+    background: "rgba(148, 163, 184, 0.16)",
+    borderColor: "rgba(148, 163, 184, 0.35)",
+    color: "#cbd5e1",
+  },
+  cancel: {
+    background: "rgba(71, 85, 105, 0.35)",
+    border: "1px solid rgba(148,163,184,0.25)",
+    color: "#fff",
+    borderRadius: 10,
+    padding: "6px 12px",
+    cursor: "pointer",
   },
   logout: {
     background: "transparent",

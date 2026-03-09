@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.core.actor import actor_key_for_anonymous, actor_key_for_user, get_anonymous_id_from_request
-from app.core.auth import get_current_user_optional
+from app.core.auth import get_current_user_if_present, get_current_user_optional
 from app.core.config import DATA_DIR, FREE_ACCESS, VIDEOS_DIR
 from app.core.media_access import assert_asset_owner_any, reassign_asset_owner
 from app.core.rate_limit import enforce_rate_limit
@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 checkout_session_cache = {}
 CHECKOUT_SESSION_TTL_SEC = 15 * 60
+ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing", "past_due"}
 
 
 class ChatMessage(BaseModel):
@@ -68,7 +69,7 @@ class AICompareRequest(BaseModel):
     )
 
 
-def _is_entitled(user_id: str) -> bool:
+def _is_entitled_from_db(user_id: str) -> bool:
     if FREE_ACCESS:
         return True
     try:
@@ -94,6 +95,45 @@ def _grant_entitlement(user_id: str) -> None:
         },
         on_conflict="user_id",
     ).execute()
+
+
+def _revoke_entitlement(user_id: str) -> None:
+    if FREE_ACCESS:
+        return
+    supabase.table("ai_entitlements").delete().eq("user_id", user_id).execute()
+
+
+def _has_active_subscription(email: str | None) -> bool:
+    if not email:
+        return False
+    customers = stripe.Customer.list(email=email, limit=10)
+    for customer in customers.data:
+        subscriptions = stripe.Subscription.list(
+            customer=customer.id,
+            status="all",
+            limit=100,
+        )
+        for sub in subscriptions.data:
+            if sub.get("status") in ACTIVE_SUBSCRIPTION_STATUSES:
+                return True
+    return False
+
+
+def _is_entitled(user_id: str, email: str | None = None) -> bool:
+    if FREE_ACCESS:
+        return True
+    if not email:
+        return _is_entitled_from_db(user_id)
+    try:
+        active = _has_active_subscription(email)
+        if active:
+            _grant_entitlement(user_id)
+            return True
+        _revoke_entitlement(user_id)
+        return False
+    except Exception:
+        logger.exception("Failed to check Stripe subscription, falling back to local entitlement")
+        return _is_entitled_from_db(user_id)
 
 
 def _csv_for_video(video_file_path: Path) -> Path | None:
@@ -165,33 +205,56 @@ async def create_checkout_session(
             anonymous_id=anonymous_id,
         )
         reassign_asset_owner(filename, actor_key_for_user(user["sub"]))
-        if _is_entitled(user["sub"]):
+        if _is_entitled(user["sub"], user.get("email")):
             return {"already_paid": True}
 
         encoded_video_path = urllib.parse.quote(video_path)
 
-        cache_key = f"{user['sub']}:{video_path}"
+        price_id = os.environ.get("STRIPE_SUBSCRIPTION_PRICE_ID")
+        if price_id:
+            line_items = [{"price": price_id, "quantity": 1}]
+        else:
+            line_items = [
+                {
+                    "price_data": {
+                        "currency": "jpy",
+                        "product_data": {
+                            "name": "AIゴルフスイング解析（月額）",
+                        },
+                        "unit_amount": 500,
+                        "recurring": {"interval": "month"},
+                    },
+                    "quantity": 1,
+                },
+            ]
+
+        cache_key = (
+            f"{user['sub']}:subscription:{video_path}:{price_id or 'inline-price'}"
+        )
         cached = checkout_session_cache.get(cache_key)
         now = time.time()
         if cached and (now - cached["created_at"]) < CHECKOUT_SESSION_TTL_SEC:
             return {"url": cached["url"]}
 
-        idempotency_key = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()
+        idempotency_payload = {
+            "user_id": user["sub"],
+            "mode": "subscription",
+            "video_path": video_path,
+            "price_id": price_id or "inline-price",
+            "success_url": (
+                f"{YOUR_DOMAIN}"
+                f"?session_id={{CHECKOUT_SESSION_ID}}"
+                f"&video_path={encoded_video_path}"
+            ),
+            "cancel_url": YOUR_DOMAIN,
+        }
+        idempotency_key = hashlib.sha256(
+            repr(sorted(idempotency_payload.items())).encode("utf-8")
+        ).hexdigest()
 
         checkout_session = stripe.checkout.Session.create(
-            mode="payment",
-            line_items=[
-                {
-                    "price_data": {
-                        "currency": "jpy",
-                        "product_data": {
-                            "name": "AIゴルフスイング解析",
-                        },
-                        "unit_amount": 500,
-                    },
-                    "quantity": 1,
-                },
-            ],
+            mode="subscription",
+            line_items=line_items,
             success_url=(
                 f"{YOUR_DOMAIN}"
                 f"?session_id={{CHECKOUT_SESSION_ID}}"
@@ -236,14 +299,33 @@ async def analyze_ai_paid(
             )
         try:
             session = stripe.checkout.Session.retrieve(session_id)
-            if session.payment_status != "paid":
-                return JSONResponse(
-                    status_code=403, content={"error": "支払いが完了していません"}
-                )
             if session.client_reference_id != user["sub"]:
                 return JSONResponse(
                     status_code=403,
                     content={"error": "この決済は現在のユーザーに紐づいていません"},
+                )
+            mode = session.get("mode")
+            if mode == "subscription":
+                subscription_id = session.get("subscription")
+                if not subscription_id:
+                    return JSONResponse(
+                        status_code=400, content={"error": "サブスク情報が見つかりません"}
+                    )
+                subscription = stripe.Subscription.retrieve(subscription_id)
+                if subscription.get("status") not in ACTIVE_SUBSCRIPTION_STATUSES:
+                    return JSONResponse(
+                        status_code=403,
+                        content={"error": "サブスクリプションが有効ではありません"},
+                    )
+            elif mode == "payment":
+                # backward compatibility with old one-time checkout sessions
+                if session.payment_status != "paid":
+                    return JSONResponse(
+                        status_code=403, content={"error": "支払いが完了していません"}
+                    )
+            else:
+                return JSONResponse(
+                    status_code=400, content={"error": "無効な決済セッションです"}
                 )
         except Exception:
             return JSONResponse(
@@ -277,12 +359,66 @@ async def analyze_ai_paid(
 
 
 @router.get("/ai/entitlement")
-def ai_entitlement(user=Depends(get_current_user_optional)):
+def ai_entitlement(user=Depends(get_current_user_if_present)):
     if FREE_ACCESS:
         return {"entitled": True, "free_access": True}
     if not user:
+        return {"entitled": False, "free_access": False}
+    return {
+        "entitled": _is_entitled(user["sub"], user.get("email")),
+        "free_access": False,
+    }
+
+
+@router.post("/subscription/cancel")
+def cancel_subscription(user=Depends(get_current_user_optional)):
+    if FREE_ACCESS:
+        raise HTTPException(
+            status_code=400,
+            detail="FREE_ACCESS is enabled; no paid subscription is active",
+        )
+    if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
-    return {"entitled": _is_entitled(user["sub"]), "free_access": False}
+
+    email = user.get("email")
+    canceled_subscription_ids: set[str] = set()
+    cancel_at_period_end_ids: set[str] = set()
+
+    if email:
+        try:
+            customers = stripe.Customer.list(email=email, limit=10)
+            for customer in customers.data:
+                subscriptions = stripe.Subscription.list(
+                    customer=customer.id,
+                    status="all",
+                    limit=100,
+                )
+                for sub in subscriptions.data:
+                    sub_status = sub.get("status")
+                    if sub_status in {"canceled", "incomplete_expired"}:
+                        continue
+                    if sub.get("cancel_at_period_end"):
+                        cancel_at_period_end_ids.add(sub["id"])
+                        continue
+                    stripe.Subscription.cancel(sub["id"])
+                    canceled_subscription_ids.add(sub["id"])
+        except Exception as exc:
+            logger.exception(
+                "Failed to cancel Stripe subscriptions for user_id=%s",
+                user["sub"],
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="サブスクリプション解約に失敗しました",
+            ) from exc
+
+    _revoke_entitlement(user["sub"])
+    return {
+        "success": True,
+        "canceled_count": len(canceled_subscription_ids),
+        "already_cancel_scheduled_count": len(cancel_at_period_end_ids),
+        "entitlement_revoked": True,
+    }
 
 
 @router.post("/analyze/ai-entitled")
@@ -294,7 +430,7 @@ def analyze_ai_entitled(
     if not FREE_ACCESS:
         if not user:
             raise HTTPException(status_code=401, detail="Authentication required")
-        if not _is_entitled(user["sub"]):
+        if not _is_entitled(user["sub"], user.get("email")):
             raise HTTPException(status_code=403, detail="Not entitled")
 
     anonymous_id = get_anonymous_id_from_request(request)
@@ -326,7 +462,7 @@ def analyze_ai_compare_entitled(
     if not FREE_ACCESS:
         if not user:
             raise HTTPException(status_code=401, detail="Authentication required")
-        if not _is_entitled(user["sub"]):
+        if not _is_entitled(user["sub"], user.get("email")):
             raise HTTPException(status_code=403, detail="Not entitled")
 
     anonymous_id = get_anonymous_id_from_request(request)
