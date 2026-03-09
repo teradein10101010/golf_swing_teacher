@@ -52,6 +52,7 @@ function App({ user }) {
   const aiRequestInFlightRef = useRef(false);
   const checkoutRequestInFlightRef = useRef(false);
   const analyzeEventSourceRef = useRef(null);
+  const previewRequestIdRef = useRef(0);
   const isMobile = useIsMobile();
 
   // ... (既存のStateはそのまま)
@@ -69,6 +70,8 @@ function App({ user }) {
   const [isEntitlementLoading, setIsEntitlementLoading] = useState(false);
   const [entitlementError, setEntitlementError] = useState(null);
   const [freeAccessServer, setFreeAccessServer] = useState(false);
+  const [isPreparingPreview, setIsPreparingPreview] = useState(false);
+  const [previewError, setPreviewError] = useState(null);
 
   // ★ 新規: 決済処理中のローディング
   const [isCheckingOut, setIsCheckingOut] = useState(false);
@@ -458,9 +461,9 @@ function App({ user }) {
     analyzeRequestInFlightRef.current = false;
     clearSingleAnalysisCache();
     setSelectedFile(file);
-
-    const localURL = URL.createObjectURL(file);
-    setOriginalVideoURL(localURL);
+    setOriginalVideoURL(null);
+    setIsPreparingPreview(true);
+    setPreviewError(null);
     // 前回結果をリセット
     setVideoURL(null);
     setEvents(null);
@@ -468,6 +471,43 @@ function App({ user }) {
     setProgressMessage("待機中");
     setIsAnalyzing(false);
     setChatMessages([]);
+
+    const requestId = previewRequestIdRef.current + 1;
+    previewRequestIdRef.current = requestId;
+
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const accessToken = data.session?.access_token;
+        const anonymousId = getAnonymousId();
+        const form = new FormData();
+        form.append("video", file);
+
+        const res = await fetch(`${API_BASE}/api/analyze/preview`, {
+          method: "POST",
+          headers: {
+            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+            "X-Anonymous-Id": anonymousId,
+          },
+          body: form,
+        });
+        if (!res.ok) {
+          throw new Error("preview conversion failed");
+        }
+        const result = await res.json();
+        if (previewRequestIdRef.current !== requestId) return;
+        setOriginalVideoURL(API_BASE + result.video_url);
+        setPreviewError(null);
+      } catch (err) {
+        console.error(err);
+        if (previewRequestIdRef.current !== requestId) return;
+        setPreviewError("元動画の変換プレビューに失敗しました");
+      } finally {
+        if (previewRequestIdRef.current === requestId) {
+          setIsPreparingPreview(false);
+        }
+      }
+    })();
   };
 
   const handleAnalyze = async () => {
@@ -641,6 +681,18 @@ function App({ user }) {
             onChange={(e) => handleFileSelect(e.target.files[0])}
           />
         </label>
+
+        {isPreparingPreview && (
+          <div style={{ ...styles.previewStatus, ...(isMobile ? styles.previewStatusMobile : {}) }}>
+            元動画プレビューを変換中...
+          </div>
+        )}
+
+        {previewError && (
+          <div style={{ ...styles.previewError, ...(isMobile ? styles.previewStatusMobile : {}) }}>
+            {previewError}
+          </div>
+        )}
 
         {originalVideoURL && (
           <>
@@ -831,8 +883,9 @@ function App({ user }) {
                 : "🤖 AIコーチに送信"
               : isCheckingOut
               ? "Stripeへ移動中..."
-              : "💎 AIコーチの利用を購入 (¥500)"}
+              : "💎 AIコーチの月額サブスクに登録 (¥500/月)"}
           </button>
+
         </div>
       )}
     </div>
@@ -1168,6 +1221,27 @@ const styles = {
   videoMobile: {
     marginTop: 10,
     borderRadius: 10,
+  },
+  previewStatus: {
+    marginTop: 16,
+    marginBottom: 12,
+    padding: "14px 16px",
+    borderRadius: 12,
+    background: "rgba(148, 163, 184, 0.15)",
+    color: "#e2e8f0",
+    textAlign: "center",
+  },
+  previewError: {
+    marginTop: 16,
+    marginBottom: 12,
+    padding: "14px 16px",
+    borderRadius: 12,
+    background: "rgba(239, 68, 68, 0.18)",
+    color: "#fecaca",
+    textAlign: "center",
+  },
+  previewStatusMobile: {
+    fontSize: 14,
   },
   progressWrapMobile: {
     marginBottom: 16,

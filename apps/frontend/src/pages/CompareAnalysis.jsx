@@ -46,6 +46,8 @@ function CompareAnalysis({ user }) {
   const videoBRef = useRef(null);
   const analyzeRequestInFlightRef = useRef(false);
   const aiRequestInFlightRef = useRef(false);
+  const previewARequestIdRef = useRef(0);
+  const previewBRequestIdRef = useRef(0);
   const analyzeEventSourceARef = useRef(null);
   const analyzeEventSourceBRef = useRef(null);
   const progressARef = useRef(0);
@@ -58,6 +60,10 @@ function CompareAnalysis({ user }) {
   // 元動画プレビュー用
   const [previewAURL, setPreviewAURL] = useState(null);
   const [previewBURL, setPreviewBURL] = useState(null);
+  const [isPreparingPreviewA, setIsPreparingPreviewA] = useState(false);
+  const [isPreparingPreviewB, setIsPreparingPreviewB] = useState(false);
+  const [previewErrorA, setPreviewErrorA] = useState(null);
+  const [previewErrorB, setPreviewErrorB] = useState(null);
 
   // 解析後動画
   const [videoAURL, setVideoAURL] = useState(null);
@@ -477,6 +483,38 @@ function CompareAnalysis({ user }) {
     }
   };
 
+  const requestPreview = async ({ file, side, requestId }) => {
+    const { data } = await supabase.auth.getSession();
+    const accessToken = data.session?.access_token;
+    const anonymousId = getAnonymousId();
+    const form = new FormData();
+    form.append("video", file);
+
+    const res = await fetch(`${API_BASE}/api/analyze/preview`, {
+      method: "POST",
+      headers: {
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        "X-Anonymous-Id": anonymousId,
+      },
+      body: form,
+    });
+    if (!res.ok) {
+      throw new Error(`preview conversion failed for ${side}`);
+    }
+    const result = await res.json();
+    if (side === "left") {
+      if (previewARequestIdRef.current !== requestId) return;
+      setPreviewAURL(API_BASE + result.video_url);
+      setPreviewErrorA(null);
+      setIsPreparingPreviewA(false);
+      return;
+    }
+    if (previewBRequestIdRef.current !== requestId) return;
+    setPreviewBURL(API_BASE + result.video_url);
+    setPreviewErrorB(null);
+    setIsPreparingPreviewB(false);
+  };
+
   /* =====================
      ファイル選択（即プレビュー）
   ===================== */
@@ -494,13 +532,24 @@ function CompareAnalysis({ user }) {
     progressBRef.current = 0;
     clearCompareAnalysisCache();
     setFileA(file);
-    setPreviewAURL(URL.createObjectURL(file));
+    setPreviewAURL(null);
+    setIsPreparingPreviewA(true);
+    setPreviewErrorA(null);
     setVideoAURL(null);
     setEventsA(null);
     setProgress(0);
     setProgressMessage("待機中");
     setIsAnalyzing(false);
     setChatMessages([]);
+
+    const requestId = previewARequestIdRef.current + 1;
+    previewARequestIdRef.current = requestId;
+    requestPreview({ file, side: "left", requestId }).catch((err) => {
+      console.error(err);
+      if (previewARequestIdRef.current !== requestId) return;
+      setPreviewErrorA("左動画の変換プレビューに失敗しました");
+      setIsPreparingPreviewA(false);
+    });
   };
 
   const onSelectB = (file) => {
@@ -517,13 +566,24 @@ function CompareAnalysis({ user }) {
     progressBRef.current = 0;
     clearCompareAnalysisCache();
     setFileB(file);
-    setPreviewBURL(URL.createObjectURL(file));
+    setPreviewBURL(null);
+    setIsPreparingPreviewB(true);
+    setPreviewErrorB(null);
     setVideoBURL(null);
     setEventsB(null);
     setProgress(0);
     setProgressMessage("待機中");
     setIsAnalyzing(false);
     setChatMessages([]);
+
+    const requestId = previewBRequestIdRef.current + 1;
+    previewBRequestIdRef.current = requestId;
+    requestPreview({ file, side: "right", requestId }).catch((err) => {
+      console.error(err);
+      if (previewBRequestIdRef.current !== requestId) return;
+      setPreviewErrorB("右動画の変換プレビューに失敗しました");
+      setIsPreparingPreviewB(false);
+    });
   };
 
   /* =====================
@@ -772,6 +832,31 @@ function CompareAnalysis({ user }) {
       {/* Videos（片方だけでも表示） */}
       {(currentAURL || currentBURL) && (
         <div style={{ maxWidth: 900, margin: "0 auto", width: "100%" }}>
+          {(isPreparingPreviewA || isPreparingPreviewB || previewErrorA || previewErrorB) && (
+            <div style={styles.previewStateWrap}>
+              {isPreparingPreviewA && (
+                <div style={{ ...styles.previewStatus, ...(isMobile ? styles.previewStatusMobile : {}) }}>
+                  左動画を変換中...
+                </div>
+              )}
+              {previewErrorA && (
+                <div style={{ ...styles.previewError, ...(isMobile ? styles.previewStatusMobile : {}) }}>
+                  {previewErrorA}
+                </div>
+              )}
+              {isPreparingPreviewB && (
+                <div style={{ ...styles.previewStatus, ...(isMobile ? styles.previewStatusMobile : {}) }}>
+                  右動画を変換中...
+                </div>
+              )}
+              {previewErrorB && (
+                <div style={{ ...styles.previewError, ...(isMobile ? styles.previewStatusMobile : {}) }}>
+                  {previewErrorB}
+                </div>
+              )}
+            </div>
+          )}
+
           <div style={{ ...styles.videoGrid, ...(isMobile ? styles.videoGridMobile : {}) }}>
             {currentAURL && (
               <video
@@ -879,6 +964,7 @@ function CompareAnalysis({ user }) {
                     : "🤖 比較AIコーチに送信"
                   : "🔒 比較AIの利用にはサブスク登録が必要です"}
               </button>
+
             </>
           )}
         </div>
@@ -1176,6 +1262,25 @@ const styles = {
   chatLoadingText: {
     color: "#cbd5e1",
   },
+  previewStateWrap: {
+    marginBottom: 12,
+  },
+  previewStatus: {
+    marginTop: 12,
+    padding: "14px 16px",
+    borderRadius: 12,
+    background: "rgba(148, 163, 184, 0.15)",
+    color: "#e2e8f0",
+    textAlign: "center",
+  },
+  previewError: {
+    marginTop: 12,
+    padding: "14px 16px",
+    borderRadius: 12,
+    background: "rgba(239, 68, 68, 0.18)",
+    color: "#fecaca",
+    textAlign: "center",
+  },
   pageMobile: {
     minHeight: "auto",
     padding: "14px 0 8px",
@@ -1212,6 +1317,9 @@ const styles = {
   },
   progressTextMobile: {
     marginTop: 8,
+  },
+  previewStatusMobile: {
+    fontSize: 14,
   },
   jumpButtonsMobile: {
     gap: 6,

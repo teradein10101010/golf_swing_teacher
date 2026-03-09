@@ -18,6 +18,5 @@ services:
       - "5173:5173"
     environment:
       - VITE_API_BASE=
-      - VITE_FREE_ACCESS=1
     depends_on:
       - backend

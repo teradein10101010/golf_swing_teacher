@@ -207,6 +207,38 @@ async def analyze_single(
     return {"job_id": job_id}
 
 
+@router.post("/preview")
+async def analyze_preview(
+    request: Request,
+    video: UploadFile = File(...),
+    user=Depends(get_current_user_if_present),
+):
+    actor_key, rate_limiter_actor = _resolve_actor(request, user)
+    enforce_rate_limit(
+        key=f"analyze:preview:{rate_limiter_actor}:{request.client.host if request.client else 'unknown'}",
+        limit=6,
+        window_seconds=60,
+    )
+
+    preview_name = f"preview_{uuid.uuid4().hex}.mp4"
+    preview_path = VIDEOS_DIR / preview_name
+    input_path = await _save_upload_to_temp(video)
+
+    try:
+        ffmpeg_to_cfr(
+            input_path=input_path,
+            output_path=preview_path,
+            fps=30,
+        )
+        register_asset_owner(preview_name, actor_key)
+        return {"video_url": _make_media_video_url(preview_name)}
+    finally:
+        try:
+            Path(input_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 @router.post("/compare")
 async def analyze_compare(
     request: Request,
