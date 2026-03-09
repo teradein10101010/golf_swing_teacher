@@ -10,6 +10,9 @@ export default function Auth({ onUserChange }) {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [isEntitled, setIsEntitled] = useState(false);
+  const [isPaid, setIsPaid] = useState(false);
+  const [freeTrialRemaining, setFreeTrialRemaining] = useState(0);
+  const [isFreeAccess, setIsFreeAccess] = useState(false);
   const [isEntitlementLoading, setIsEntitlementLoading] = useState(false);
   const [isCanceling, setIsCanceling] = useState(false);
   const isMobile = useIsMobile();
@@ -33,6 +36,9 @@ export default function Auth({ onUserChange }) {
   useEffect(() => {
     if (!user) {
       setIsEntitled(false);
+      setIsPaid(false);
+      setFreeTrialRemaining(0);
+      setIsFreeAccess(false);
       setIsEntitlementLoading(false);
       return;
     }
@@ -53,11 +59,17 @@ export default function Auth({ onUserChange }) {
         const result = await res.json();
         if (active) {
           setIsEntitled(Boolean(result.entitled));
+          setIsPaid(Boolean(result.is_paid));
+          setFreeTrialRemaining(Number(result.free_trial_remaining || 0));
+          setIsFreeAccess(Boolean(result.free_access));
         }
       } catch (err) {
         console.error("fetchEntitlement failed", err);
         if (active) {
           setIsEntitled(false);
+          setIsPaid(false);
+          setFreeTrialRemaining(0);
+          setIsFreeAccess(false);
         }
       } finally {
         if (active) {
@@ -95,6 +107,8 @@ export default function Auth({ onUserChange }) {
         throw new Error(result.detail || "cancel failed");
       }
       setIsEntitled(false);
+      setIsPaid(false);
+      setIsFreeAccess(false);
       alert("サブスクリプションを解約しました");
     } catch (err) {
       console.error(err);
@@ -145,10 +159,18 @@ export default function Auth({ onUserChange }) {
               ...(isEntitled ? styles.statusPaid : styles.statusFree),
             }}
           >
-            {isEntitlementLoading ? "確認中" : isEntitled ? "課金中" : "未課金"}
+            {isEntitlementLoading
+              ? "確認中"
+              : isFreeAccess
+              ? "無料開放中"
+              : isPaid
+              ? "課金中"
+              : freeTrialRemaining > 0
+              ? `無料残り${freeTrialRemaining}回`
+              : "未課金"}
           </span>
         </div>
-        {isEntitled && (
+        {isPaid && !isFreeAccess && (
           <button
             style={{ ...styles.cancel, ...(isMobile ? styles.actionMobile : {}) }}
             onClick={handleCancelSubscription}

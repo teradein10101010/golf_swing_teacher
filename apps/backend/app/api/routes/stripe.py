@@ -36,6 +36,7 @@ logger = logging.getLogger(__name__)
 checkout_session_cache = {}
 CHECKOUT_SESSION_TTL_SEC = 15 * 60
 ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing", "past_due"}
+FREE_TRIAL_USES = 3
 
 
 class ChatMessage(BaseModel):
@@ -83,6 +84,69 @@ def _is_entitled_from_db(user_id: str) -> bool:
         return bool(res.data)
     except Exception:
         return False
+
+
+def _get_free_trial_usage_count(user_id: str) -> int:
+    try:
+        res = (
+            supabase.table("ai_free_trial_usages")
+            .select("id")
+            .eq("user_id", user_id)
+            .limit(FREE_TRIAL_USES + 1)
+            .execute()
+        )
+        return len(res.data or [])
+    except Exception:
+        logger.exception("Failed to fetch free trial usage count for user_id=%s", user_id)
+        return FREE_TRIAL_USES
+
+
+def _get_free_trial_remaining(user_id: str) -> int:
+    return max(0, FREE_TRIAL_USES - _get_free_trial_usage_count(user_id))
+
+
+def _consume_free_trial_use(user_id: str) -> int | None:
+    if FREE_ACCESS:
+        return FREE_TRIAL_USES
+
+    current_count = _get_free_trial_usage_count(user_id)
+    if current_count >= FREE_TRIAL_USES:
+        return None
+
+    inserted_id = None
+    try:
+        insert_res = (
+            supabase.table("ai_free_trial_usages")
+            .insert({"user_id": user_id, "used_at": datetime.utcnow().isoformat()})
+            .execute()
+        )
+        if insert_res.data:
+            inserted_id = insert_res.data[0].get("id")
+    except Exception:
+        logger.exception("Failed to consume free trial use for user_id=%s", user_id)
+        return None
+
+    remaining = _get_free_trial_remaining(user_id)
+    if remaining < 0:
+        remaining = 0
+
+    if _get_free_trial_usage_count(user_id) > FREE_TRIAL_USES:
+        if inserted_id is not None:
+            try:
+                (
+                    supabase.table("ai_free_trial_usages")
+                    .delete()
+                    .eq("id", inserted_id)
+                    .execute()
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to rollback extra free trial use for user_id=%s",
+                    user_id,
+                )
+        return None
+
+    return remaining
 
 
 def _grant_entitlement(user_id: str) -> None:
@@ -134,6 +198,25 @@ def _is_entitled(user_id: str, email: str | None = None) -> bool:
     except Exception:
         logger.exception("Failed to check Stripe subscription, falling back to local entitlement")
         return _is_entitled_from_db(user_id)
+
+
+def _get_entitlement_state(user_id: str, email: str | None = None) -> dict[str, int | bool]:
+    if FREE_ACCESS:
+        return {
+            "entitled": True,
+            "free_access": True,
+            "is_paid": True,
+            "free_trial_remaining": FREE_TRIAL_USES,
+        }
+
+    is_paid = _is_entitled(user_id, email)
+    free_trial_remaining = 0 if is_paid else _get_free_trial_remaining(user_id)
+    return {
+        "entitled": is_paid or free_trial_remaining > 0,
+        "free_access": False,
+        "is_paid": is_paid,
+        "free_trial_remaining": free_trial_remaining,
+    }
 
 
 def _csv_for_video(video_file_path: Path) -> Path | None:
@@ -205,7 +288,8 @@ async def create_checkout_session(
             anonymous_id=anonymous_id,
         )
         reassign_asset_owner(filename, actor_key_for_user(user["sub"]))
-        if _is_entitled(user["sub"], user.get("email")):
+        entitlement = _get_entitlement_state(user["sub"], user.get("email"))
+        if entitlement["entitled"]:
             return {"already_paid": True}
 
         encoded_video_path = urllib.parse.quote(video_path)
@@ -361,13 +445,15 @@ async def analyze_ai_paid(
 @router.get("/ai/entitlement")
 def ai_entitlement(user=Depends(get_current_user_if_present)):
     if FREE_ACCESS:
-        return {"entitled": True, "free_access": True}
+        return _get_entitlement_state("__free_access__")
     if not user:
-        return {"entitled": False, "free_access": False}
-    return {
-        "entitled": _is_entitled(user["sub"], user.get("email")),
-        "free_access": False,
-    }
+        return {
+            "entitled": False,
+            "free_access": False,
+            "is_paid": False,
+            "free_trial_remaining": 0,
+        }
+    return _get_entitlement_state(user["sub"], user.get("email"))
 
 
 @router.post("/subscription/cancel")
@@ -427,10 +513,12 @@ def analyze_ai_entitled(
     request: Request,
     user=Depends(get_current_user_optional),
 ):
+    entitlement = None
     if not FREE_ACCESS:
         if not user:
             raise HTTPException(status_code=401, detail="Authentication required")
-        if not _is_entitled(user["sub"], user.get("email")):
+        entitlement = _get_entitlement_state(user["sub"], user.get("email"))
+        if not entitlement["entitled"]:
             raise HTTPException(status_code=403, detail="Not entitled")
 
     anonymous_id = get_anonymous_id_from_request(request)
@@ -450,7 +538,13 @@ def analyze_ai_entitled(
             for msg in (req.ai_messages or [])
         ],
     )
-    return {"advice": advice}
+    free_trial_remaining = entitlement["free_trial_remaining"] if entitlement else FREE_TRIAL_USES
+    if user and entitlement and not entitlement["is_paid"]:
+        consumed_remaining = _consume_free_trial_use(user["sub"])
+        if consumed_remaining is None:
+            raise HTTPException(status_code=403, detail="Free trial exhausted")
+        free_trial_remaining = consumed_remaining
+    return {"advice": advice, "free_trial_remaining": free_trial_remaining}
 
 
 @router.post("/analyze/ai-compare-entitled")
@@ -459,10 +553,12 @@ def analyze_ai_compare_entitled(
     request: Request,
     user=Depends(get_current_user_optional),
 ):
+    entitlement = None
     if not FREE_ACCESS:
         if not user:
             raise HTTPException(status_code=401, detail="Authentication required")
-        if not _is_entitled(user["sub"], user.get("email")):
+        entitlement = _get_entitlement_state(user["sub"], user.get("email"))
+        if not entitlement["entitled"]:
             raise HTTPException(status_code=403, detail="Not entitled")
 
     anonymous_id = get_anonymous_id_from_request(request)
@@ -490,7 +586,13 @@ def analyze_ai_compare_entitled(
             for msg in (req.ai_messages or [])
         ],
     )
-    return {"advice": advice}
+    free_trial_remaining = entitlement["free_trial_remaining"] if entitlement else FREE_TRIAL_USES
+    if user and entitlement and not entitlement["is_paid"]:
+        consumed_remaining = _consume_free_trial_use(user["sub"])
+        if consumed_remaining is None:
+            raise HTTPException(status_code=403, detail="Free trial exhausted")
+        free_trial_remaining = consumed_remaining
+    return {"advice": advice, "free_trial_remaining": free_trial_remaining}
 
 
 @router.post("/analyze/ai")
