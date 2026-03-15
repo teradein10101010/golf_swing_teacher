@@ -1,10 +1,34 @@
+@import url("https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;600;700&display=swap");
+
+:root {
+  --bg: #f6f1e7;
+  --bg-grad: linear-gradient(180deg, #f8f2e8 0%, #f2eadf 55%, #ede1d2 100%);
+  --surface: #fffaf1;
+  --surface-2: #f3e7d7;
+  --text: #3b2f25;
+  --text-muted: #7a6a5a;
+  --accent: #b57a4a;
+  --accent-strong: #9a6238;
+  --accent-soft: rgba(181, 122, 74, 0.18);
+  --line: #e6d6c5;
+  --shadow: rgba(59, 43, 29, 0.12);
+}
+
 html,
 body,
 #root {
   margin: 0;
   padding: 0;
   min-height: 100%;
-  background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+  background:
+    linear-gradient(180deg, rgba(248, 242, 232, 0.78) 0%, rgba(242, 234, 223, 0.78) 55%, rgba(237, 225, 210, 0.78) 100%),
+    url("/hero-bg.png");
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center bottom;
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: "Noto Sans JP", "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif;
 }
 
 html {

@@ -783,10 +783,10 @@ function CompareAnalysis({ user }) {
   return (
     <div style={{ ...styles.page, ...(isMobile ? styles.pageMobile : {}) }}>
       <h1 style={{ ...styles.title, ...(isMobile ? styles.titleMobile : {}) }}>
-        🏌️ Swing Compare Analysis
+        🏌️ スイング比較解析
       </h1>
       <p style={{ ...styles.subtitle, ...(isMobile ? styles.subtitleMobile : {}) }}>
-        2つのスイングを同期して比較
+        2つのスイングを並べて分かりやすく比較します
       </p>
 
       {/* Upload */}
@@ -981,7 +981,7 @@ function CompareAnalysis({ user }) {
                 style={{
                   ...styles.primaryButton,
                   ...(isMobile ? styles.primaryButtonMobile : {}),
-                  background: "linear-gradient(90deg, #6366f1, #4f46e5)",
+                  background: "linear-gradient(135deg, var(--accent), var(--accent-strong))",
                   cursor:
                     !user || isEntitlementLoading || entitlementError ? "not-allowed" : "pointer",
                 }}
@@ -1096,34 +1096,40 @@ const JumpButton = ({ label, onClick, isMobile }) => (
 const styles = {
   page: {
     minHeight: "100vh",
-    background: "linear-gradient(135deg, #0f2027, #203a43, #2c5364)",
-    color: "#fff",
+    background: "transparent",
+    color: "var(--text)",
     padding: 32,
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont",
+    fontFamily: "inherit",
   },
   title: {
     textAlign: "center",
     fontSize: 36,
     marginBottom: 4,
+    color: "var(--text)",
+    textShadow: "0 2px 10px rgba(255, 255, 255, 0.9)",
   },
   subtitle: {
     textAlign: "center",
-    color: "#cbd5e1",
+    color: "var(--text-muted)",
     marginBottom: 32,
   },
   card: {
-    background: "#0b1220",
+    background: "var(--surface)",
+    color: "var(--text)",
     maxWidth: 520,
     margin: "0 auto 32px",
     padding: 24,
     borderRadius: 16,
-    boxShadow: "0 10px 30px rgba(0,0,0,0.4)",
+    border: "1px solid var(--line)",
+    boxShadow: "0 18px 36px var(--shadow)",
   },
   fileLabel: {
     display: "inline-block",
     padding: "10px 16px",
     borderRadius: 10,
-    background: "#1e293b",
+    background: "var(--surface-2)",
+    color: "var(--text)",
+    border: "1px solid var(--line)",
     cursor: "pointer",
     marginBottom: 16,
     marginRight: 8,
@@ -1134,8 +1140,8 @@ const styles = {
     padding: "12px 0",
     borderRadius: 12,
     border: "none",
-    background: "linear-gradient(90deg, #22c55e, #16a34a)",
-    color: "#fff",
+    background: "linear-gradient(135deg, var(--accent), var(--accent-strong))",
+    color: "#fffaf1",
     fontSize: 16,
     cursor: "pointer",
   },
@@ -1150,9 +1156,10 @@ const styles = {
     padding: "6px 12px",
     borderRadius: 999,
     border: "none",
-    background: "#334155",
-    color: "#fff",
+    background: "var(--surface-2)",
+    color: "var(--text)",
     cursor: "pointer",
+    border: "1px solid var(--line)",
   },
   video: {
     width: "100%",
@@ -1169,28 +1176,28 @@ const styles = {
   },
   progressBar: {
     height: 10,
-    background: "#334155",
+    background: "rgba(181, 122, 74, 0.2)",
     borderRadius: 999,
     overflow: "hidden",
   },
   progressInner: {
     height: "100%",
-    background: "linear-gradient(90deg,#22c55e,#16a34a)",
+    background: "linear-gradient(90deg, var(--accent), var(--accent-strong))",
     transition: "width 0.2s ease",
   },
   progressText: {
     fontSize: 12,
     marginTop: 6,
-    color: "#cbd5e1",
+    color: "var(--text-muted)",
     textAlign: "center",
   },
   aiBox: {
     marginTop: 20,
-    background: "linear-gradient(180deg,#0b1220 0%, #0a0f1c 100%)",
+    background: "var(--surface)",
     padding: 18,
     borderRadius: 14,
-    border: "1px solid #1f2937",
-    boxShadow: "0 10px 30px rgba(2,6,23,0.35)",
+    border: "1px solid var(--line)",
+    boxShadow: "0 16px 32px var(--shadow)",
   },
   aiHeader: {
     display: "flex",
@@ -1204,7 +1211,7 @@ const styles = {
     letterSpacing: 0.2,
   },
   aiContent: {
-    color: "#e2e8f0",
+    color: "var(--text)",
     fontSize: 15,
     lineHeight: 1.85,
     letterSpacing: 0.2,
@@ -1218,7 +1225,7 @@ const styles = {
   aiHeading: {
     margin: "6px 0 8px",
     fontSize: 16,
-    color: "#f8fafc",
+    color: "var(--text)",
   },
   aiList: {
     margin: "0 0 10px 20px",
@@ -1229,14 +1236,14 @@ const styles = {
   },
   aiDivider: {
     border: "none",
-    borderTop: "1px solid #1f2937",
+    borderTop: "1px solid var(--line)",
     margin: "12px 0",
   },
   aiSpacer: {
     height: 6,
   },
   aiStrong: {
-    color: "#f8fafc",
+    color: "var(--text)",
   },
   promptSection: {
     marginTop: 14,
@@ -1244,7 +1251,7 @@ const styles = {
   promptLabel: {
     display: "block",
     fontSize: 13,
-    color: "#cbd5e1",
+    color: "var(--text-muted)",
     marginBottom: 6,
   },
   promptTextarea: {
@@ -1252,9 +1259,9 @@ const styles = {
     minHeight: 120,
     boxSizing: "border-box",
     borderRadius: 10,
-    border: "1px solid #334155",
-    background: "#0f172a",
-    color: "#e2e8f0",
+    border: "1px solid var(--line)",
+    background: "var(--surface)",
+    color: "var(--text)",
     padding: 10,
     fontSize: 14,
     lineHeight: 1.5,
@@ -1268,26 +1275,26 @@ const styles = {
     marginBottom: 0,
     textAlign: "right",
     fontSize: 12,
-    color: "#94a3b8",
+    color: "var(--text-muted)",
   },
   chatBubble: {
     borderRadius: 12,
     padding: 10,
   },
   userBubble: {
-    background: "#1d4ed8",
+    background: "rgba(181, 122, 74, 0.2)",
     borderTopRightRadius: 4,
     alignSelf: "flex-end",
     maxWidth: "90%",
   },
   assistantBubble: {
-    background: "#0f172a",
-    border: "1px solid #1f2937",
+    background: "var(--surface-2)",
+    border: "1px solid var(--line)",
     borderTopLeftRadius: 4,
   },
   chatRole: {
     fontSize: 12,
-    color: "#bfdbfe",
+    color: "var(--text-muted)",
     marginBottom: 6,
     fontWeight: 600,
   },
@@ -1296,7 +1303,7 @@ const styles = {
     whiteSpace: "pre-wrap",
   },
   chatLoadingText: {
-    color: "#cbd5e1",
+    color: "var(--text-muted)",
   },
   previewStateWrap: {
     marginBottom: 12,
@@ -1305,16 +1312,16 @@ const styles = {
     marginTop: 12,
     padding: "14px 16px",
     borderRadius: 12,
-    background: "rgba(148, 163, 184, 0.15)",
-    color: "#e2e8f0",
+    background: "rgba(181, 122, 74, 0.12)",
+    color: "var(--text)",
     textAlign: "center",
   },
   previewError: {
     marginTop: 12,
     padding: "14px 16px",
     borderRadius: 12,
-    background: "rgba(239, 68, 68, 0.18)",
-    color: "#fecaca",
+    background: "rgba(220, 100, 80, 0.12)",
+    color: "#7a2e24",
     textAlign: "center",
   },
   pageMobile: {

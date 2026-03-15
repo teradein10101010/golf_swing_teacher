@@ -8,7 +8,7 @@ export default function Footer() {
   return (
     <footer style={{ ...styles.footer, ...(isMobile ? styles.footerMobile : {}) }}>
       <div style={{ ...styles.brand, ...(isMobile ? styles.brandMobile : {}) }}>
-        Golf Swing Analyzer
+        ゴルフスイング解析
       </div>
       <nav style={{ ...styles.nav, ...(isMobile ? styles.navMobile : {}) }}>
         <Link
@@ -43,7 +43,7 @@ export default function Footer() {
         </Link>
       </nav>
       <div style={{ ...styles.note, ...(isMobile ? styles.noteMobile : {}) }}>
-        © {new Date().getFullYear()} Golf Swing Analyzer
+        © {new Date().getFullYear()} ゴルフスイング解析
       </div>
     </footer>
   );
@@ -54,20 +54,21 @@ const styles = {
     marginTop: 24,
     padding: "20px 24px",
     borderRadius: 16,
-    background: "rgba(15, 32, 39, 0.8)",
-    backdropFilter: "blur(12px)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    color: "#cbd5e1",
+    background: "rgba(255, 250, 241, 0.9)",
+    backdropFilter: "blur(10px)",
+    border: "1px solid var(--line)",
+    color: "var(--text-muted)",
     display: "flex",
     flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 12,
+    boxShadow: "0 12px 28px var(--shadow)",
   },
   brand: {
     fontSize: 14,
     fontWeight: 700,
-    color: "#fff",
+    color: "var(--text)",
   },
   nav: {
     display: "flex",
@@ -78,16 +79,16 @@ const styles = {
     padding: "6px 12px",
     borderRadius: 999,
     textDecoration: "none",
-    color: "#cbd5e1",
+    color: "var(--text-muted)",
     fontSize: 12,
   },
   navActive: {
-    background: "rgba(255,255,255,0.12)",
-    color: "#fff",
+    background: "var(--accent-soft)",
+    color: "var(--text)",
   },
   note: {
     fontSize: 12,
-    color: "#94a3b8",
+    color: "var(--text-muted)",
   },
   footerMobile: {
     marginTop: 8,
