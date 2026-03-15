@@ -261,13 +261,21 @@ class SwingAnalyzer:
         return 0
 
     def detect_top(self, df, start, win=3):
+        if len(df) == 0:
+            return 0
+        if start >= len(df) - 1:
+            return len(df) - 1
         diff = df["wrist_y"].diff().iloc[start:]
         for i in range(len(diff) - win):
             if diff.iloc[i : i + win].mean() > 0.005:
                 return i + start
-        return start + 10
+        return min(start + 10, len(df) - 1)
 
     def detect_finish(self, df, top, win=10):
+        if len(df) == 0:
+            return 0
+        if top >= len(df) - 1:
+            return len(df) - 1
         diff = df["shoulder_angle"].diff().abs().iloc[top:]
         for i in range(len(diff) - win):
             if diff.iloc[i : i + win].mean() < 1:
@@ -275,7 +283,14 @@ class SwingAnalyzer:
         return len(df) - 1
 
     def detect_impact(self, df, top, end):
-        return df["wrist_y"].iloc[top:end].idxmax()
+        if len(df) == 0:
+            return 0
+        top = max(0, min(int(top), len(df) - 1))
+        end = max(top + 1, min(int(end), len(df)))
+        segment = df["wrist_y"].iloc[top:end].dropna()
+        if segment.empty:
+            return top
+        return int(segment.idxmax())
 
     # =========================
     # 描画
@@ -315,6 +330,12 @@ class SwingAnalyzer:
                 "baseline",
                 "-level",
                 "3.1",
+                "-colorspace",
+                "bt709",
+                "-color_primaries",
+                "bt709",
+                "-color_trc",
+                "bt709",
                 "-movflags",
                 "+faststart",
                 str(out_path),

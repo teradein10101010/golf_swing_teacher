@@ -13,7 +13,7 @@ export default function Header({ user, onUserChange }) {
     <header style={{ ...styles.header, ...(isMobile ? styles.headerMobile : {}) }}>
       {/* Logo */}
       <div style={{ ...styles.logo, ...(isMobile ? styles.logoMobile : {}) }}>
-        🏌️ Golf Swing Analyzer
+        🏌️ ゴルフスイング解析
       </div>
 
       {/* Nav */}
@@ -26,7 +26,8 @@ export default function Header({ user, onUserChange }) {
             ...(location.pathname === "/" ? styles.navActive : {}),
           }}
         >
-          単体分析
+          <span style={styles.navItemTitle}>単体スイング解析</span>
+          <span style={styles.navItemSub}>1本の動画を詳しく</span>
         </Link>
         <Link
           to="/compare"
@@ -36,7 +37,8 @@ export default function Header({ user, onUserChange }) {
             ...(location.pathname === "/compare" ? styles.navActive : {}),
           }}
         >
-          比較分析
+          <span style={styles.navItemTitle}>2本比較解析</span>
+          <span style={styles.navItemSub}>2本を並べて比較</span>
         </Link>
       </nav>
 
@@ -54,32 +56,50 @@ const styles = {
     alignItems: "center",
     justifyContent: "space-between",
     borderRadius: 16,
-    background: "rgba(15, 32, 39, 0.8)",
-    backdropFilter: "blur(12px)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    color: "#fff",
+    background: "rgba(255, 250, 241, 0.9)",
+    backdropFilter: "blur(10px)",
+    border: "1px solid var(--line)",
+    color: "var(--text)",
     position: "sticky",
     top: "env(safe-area-inset-top, 0px)",
     zIndex: 40,
+    boxShadow: "0 12px 28px var(--shadow)",
   },
   logo: {
     fontSize: 18,
     fontWeight: 700,
+    textShadow: "0 1px 6px rgba(255, 255, 255, 0.8)",
   },
   nav: {
     display: "flex",
     gap: 16,
   },
   navItem: {
-    padding: "8px 14px",
-    borderRadius: 999,
+    padding: "8px 16px",
+    borderRadius: 12,
     textDecoration: "none",
-    color: "#cbd5e1",
+    color: "var(--text-muted)",
     fontSize: 14,
+    background: "var(--surface)",
+    border: "1px solid var(--line)",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 2,
+    minWidth: 150,
   },
   navActive: {
-    background: "rgba(255,255,255,0.12)",
-    color: "#fff",
+    background: "var(--accent-soft)",
+    color: "var(--text)",
+    border: "1px solid rgba(181, 122, 74, 0.45)",
+  },
+  navItemTitle: {
+    fontWeight: 700,
+    letterSpacing: 0.2,
+  },
+  navItemSub: {
+    fontSize: 11,
+    color: "var(--text-muted)",
   },
   headerMobile: {
     height: "auto",
@@ -98,9 +118,9 @@ const styles = {
     gap: 10,
   },
   navItemMobile: {
-    padding: "10px 14px",
+    padding: "10px 12px",
     fontSize: 13,
-    minWidth: 110,
+    minWidth: 140,
     textAlign: "center",
   },
 };

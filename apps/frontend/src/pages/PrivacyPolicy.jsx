@@ -3,8 +3,7 @@ export default function PrivacyPolicy() {
     <div style={styles.page}>
       <h1 style={styles.title}>プライバシーポリシー</h1>
       <p style={styles.lead}>
-        Golf Swing
-        Analyzer（以下「当サービス」）は、ユーザーの個人情報の取り扱いについて以下のとおり定めます。
+        ゴルフスイング解析（以下「当サービス」）は、ユーザーの個人情報の取り扱いについて以下のとおり定めます。
       </p>
 
       <section style={styles.section}>
@@ -82,16 +81,16 @@ const styles = {
     maxWidth: 920,
     margin: "0 auto",
     padding: "24px 20px",
-    background: "rgba(2, 6, 23, 0.45)",
+    background: "var(--surface)",
     borderRadius: 16,
-    border: "1px solid rgba(255,255,255,0.08)",
-    boxShadow: "0 20px 40px rgba(0,0,0,0.2)",
+    border: "1px solid var(--line)",
+    boxShadow: "0 20px 40px var(--shadow)",
   },
   title: { fontSize: 28, fontWeight: 800, marginBottom: 12 },
-  lead: { color: "#e2e8f0", marginBottom: 24, lineHeight: 1.7 },
+  lead: { color: "var(--text)", marginBottom: 24, lineHeight: 1.7 },
   section: { marginBottom: 20 },
   heading: { fontSize: 18, fontWeight: 700, marginBottom: 8 },
-  text: { color: "#cbd5e1", lineHeight: 1.7 },
-  list: { margin: "8px 0 0 18px", color: "#cbd5e1", lineHeight: 1.7 },
-  date: { marginTop: 24, color: "#94a3b8", fontSize: 12 },
+  text: { color: "var(--text-muted)", lineHeight: 1.7 },
+  list: { margin: "8px 0 0 18px", color: "var(--text-muted)", lineHeight: 1.7 },
+  date: { marginTop: 24, color: "var(--text-muted)", fontSize: 12 },
 };

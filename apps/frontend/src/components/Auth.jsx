@@ -196,14 +196,14 @@ export default function Auth({ onUserChange }) {
     <div style={{ ...styles.authBox, ...(isMobile ? styles.authBoxMobile : {}) }}>
       <input
         style={{ ...styles.input, ...(isMobile ? styles.inputMobile : {}) }}
-        placeholder="email"
+        placeholder="メールアドレス"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
       />
       <input
         style={{ ...styles.input, ...(isMobile ? styles.inputMobile : {}) }}
         type="password"
-        placeholder="password"
+        placeholder="パスワード"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
       />
@@ -241,9 +241,9 @@ const styles = {
     height: 36,
     padding: "0 12px",
     borderRadius: 10,
-    border: "1px solid rgba(255,255,255,0.15)",
-    background: "rgba(0,0,0,0.3)",
-    color: "#fff",
+    border: "1px solid var(--line)",
+    background: "var(--surface)",
+    color: "var(--text)",
     outline: "none",
   },
   login: {
@@ -251,8 +251,8 @@ const styles = {
     padding: "0 16px",
     borderRadius: 12,
     border: "none",
-    background: "linear-gradient(90deg,#22c55e,#16a34a)",
-    color: "#fff",
+    background: "linear-gradient(135deg, var(--accent), var(--accent-strong))",
+    color: "#fffaf1",
     fontWeight: 600,
     cursor: "pointer",
   },
@@ -260,9 +260,9 @@ const styles = {
     height: 36,
     padding: "0 14px",
     borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.2)",
-    background: "transparent",
-    color: "#fff",
+    border: "1px solid var(--line)",
+    background: "var(--surface-2)",
+    color: "var(--text)",
     cursor: "pointer",
   },
   userBox: {
@@ -282,27 +282,27 @@ const styles = {
     border: "1px solid transparent",
   },
   statusPaid: {
-    background: "rgba(34, 197, 94, 0.16)",
-    borderColor: "rgba(34, 197, 94, 0.35)",
-    color: "#bbf7d0",
+    background: "rgba(181, 122, 74, 0.16)",
+    borderColor: "rgba(181, 122, 74, 0.35)",
+    color: "var(--text)",
   },
   statusFree: {
-    background: "rgba(148, 163, 184, 0.16)",
-    borderColor: "rgba(148, 163, 184, 0.35)",
-    color: "#cbd5e1",
+    background: "rgba(122, 106, 90, 0.12)",
+    borderColor: "rgba(122, 106, 90, 0.3)",
+    color: "var(--text-muted)",
   },
   cancel: {
-    background: "rgba(71, 85, 105, 0.35)",
-    border: "1px solid rgba(148,163,184,0.25)",
-    color: "#fff",
+    background: "var(--surface-2)",
+    border: "1px solid var(--line)",
+    color: "var(--text)",
     borderRadius: 10,
     padding: "6px 12px",
     cursor: "pointer",
   },
   logout: {
-    background: "transparent",
-    border: "1px solid rgba(255,255,255,0.2)",
-    color: "#fff",
+    background: "var(--surface)",
+    border: "1px solid var(--line)",
+    color: "var(--text)",
     borderRadius: 10,
     padding: "6px 12px",
     cursor: "pointer",

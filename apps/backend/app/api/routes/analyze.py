@@ -228,7 +228,6 @@ async def analyze_preview(
         ffmpeg_to_cfr(
             input_path=input_path,
             output_path=preview_path,
-            fps=30,
         )
         register_asset_owner(preview_name, actor_key)
         return {"video_url": _make_media_video_url(preview_name)}
@@ -267,9 +266,17 @@ async def analyze_compare(
         raise
 
     def sync_run():
+        left_cfr = None
+        right_cfr = None
         try:
-            df_l = analyzer.extract_metrics(left_path)
-            df_r = analyzer.extract_metrics(right_path)
+            progress_store[job_id]["progress"] = 5
+            left_cfr = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+            right_cfr = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+            ffmpeg_to_cfr(input_path=left_path, output_path=left_cfr, fps=30)
+            ffmpeg_to_cfr(input_path=right_path, output_path=right_cfr, fps=30)
+
+            df_l = analyzer.extract_metrics(left_cfr)
+            df_r = analyzer.extract_metrics(right_cfr)
             progress_store[job_id]["progress"] = 20
 
             l_name = f"compare_left_{job_id}.mp4"
@@ -281,10 +288,10 @@ async def analyze_compare(
                 progress_store[job_id]["progress"] = 20 + int(p * 0.8)
 
             ev_l, fps_l = analyzer.render_hud(
-                left_path, df_l, str(l_path), progress_cb=cb
+                left_cfr, df_l, str(l_path), progress_cb=cb
             )
             ev_r, fps_r = analyzer.render_hud(
-                right_path, df_r, str(r_path), progress_cb=cb
+                right_cfr, df_r, str(r_path), progress_cb=cb
             )
             register_asset_owner(l_name, actor_key)
             register_asset_owner(r_name, actor_key)
@@ -310,6 +317,10 @@ async def analyze_compare(
         finally:
             Path(left_path).unlink(missing_ok=True)
             Path(right_path).unlink(missing_ok=True)
+            if left_cfr:
+                Path(left_cfr).unlink(missing_ok=True)
+            if right_cfr:
+                Path(right_cfr).unlink(missing_ok=True)
 
     asyncio.create_task(run_in_threadpool(sync_run))
     return {"job_id": job_id}
