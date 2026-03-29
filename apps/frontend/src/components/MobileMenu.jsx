@@ -3,6 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import useIsMobile from "../hooks/useIsMobile";
 
 const MENU_LINKS = [
+  { to: "/legal", label: "特商法表記" },
   { to: "/terms", label: "利用規約" },
   { to: "/privacy", label: "プライバシーポリシー" },
   { to: "/contact", label: "お問い合わせ" },

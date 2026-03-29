@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import useIsMobile from "../hooks/useIsMobile";
 import { trackEvent } from "../lib/analytics";
@@ -77,8 +78,6 @@ function App({ user }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [isEntitled, setIsEntitled] = useState(false);
-  const [isPaidEntitled, setIsPaidEntitled] = useState(false);
-  const [freeTrialRemaining, setFreeTrialRemaining] = useState(0);
   const [isEntitlementLoading, setIsEntitlementLoading] = useState(false);
   const [entitlementError, setEntitlementError] = useState(null);
   const [freeAccessServer, setFreeAccessServer] = useState(false);
@@ -123,8 +122,6 @@ function App({ user }) {
         if (result.free_access) {
           setFreeAccessServer(true);
           setIsEntitled(true);
-          setIsPaidEntitled(true);
-          setFreeTrialRemaining(Number(result.free_trial_remaining || 0));
           setIsEntitlementLoading(false);
           setEntitlementError(null);
           return;
@@ -135,15 +132,12 @@ function App({ user }) {
     }
     if (FREE_ACCESS_EFFECTIVE || freeAccessServer) {
       setIsEntitled(true);
-      setIsPaidEntitled(true);
       setIsEntitlementLoading(false);
       setEntitlementError(null);
       return;
     }
     if (!user) {
       setIsEntitled(false);
-      setIsPaidEntitled(false);
-      setFreeTrialRemaining(0);
       setIsEntitlementLoading(false);
       setEntitlementError(null);
       return;
@@ -155,8 +149,6 @@ function App({ user }) {
       const token = data.session?.access_token;
       if (!token) {
         setIsEntitled(false);
-        setIsPaidEntitled(false);
-        setFreeTrialRemaining(0);
         return;
       }
       const res = await fetch(`${API_BASE}/api/ai/entitlement`, {
@@ -164,20 +156,14 @@ function App({ user }) {
       });
       if (!res.ok) {
         setIsEntitled(false);
-        setIsPaidEntitled(false);
-        setFreeTrialRemaining(0);
         return;
       }
       const result = await res.json();
       setIsEntitled(Boolean(result.entitled));
-      setIsPaidEntitled(Boolean(result.is_paid));
-      setFreeTrialRemaining(Number(result.free_trial_remaining || 0));
       setFreeAccessServer(Boolean(result.free_access));
     } catch (err) {
       console.error("fetchEntitlement failed", err);
       setIsEntitled(false);
-      setIsPaidEntitled(false);
-      setFreeTrialRemaining(0);
       setEntitlementError("ユーザ情報の確認に失敗しました");
     } finally {
       setIsEntitlementLoading(false);
@@ -377,8 +363,6 @@ function App({ user }) {
           },
         ]);
         setIsEntitled(true);
-        setIsPaidEntitled(true);
-        setFreeTrialRemaining(0);
         // URLを綺麗にする（オプション）
         window.history.replaceState(null, "", window.location.pathname);
       } else {
@@ -448,10 +432,6 @@ function App({ user }) {
             content: result.advice,
           },
         ]);
-        setFreeTrialRemaining(Number(result.free_trial_remaining || 0));
-        if (!FREE_ACCESS_EFFECTIVE && !freeAccessServer && !isPaidEntitled) {
-          setIsEntitled(Number(result.free_trial_remaining || 0) > 0);
-        }
       } else {
         trackEvent("ai_request_error", { mode: "single", flow: "entitled" });
         alert("AIアドバイスの取得に失敗しました");
@@ -917,13 +897,27 @@ function App({ user }) {
               : isEntitled
               ? FREE_ACCESS_EFFECTIVE || freeAccessServer
                 ? "🤖 AIコーチに送信（無料）"
-                : !isPaidEntitled && freeTrialRemaining > 0
-                ? `🤖 AIコーチに送信（無料残り${freeTrialRemaining}回）`
                 : "🤖 AIコーチに送信"
               : isCheckingOut
               ? "Stripeへ移動中..."
-              : "💎 AIコーチの月額サブスクに登録 (¥500/月)"}
+              : "💎 AIコーチの月額サブスクに登録（30日間無料、その後¥500/月）"}
           </button>
+
+          <p style={styles.legalNote}>
+            購入により
+            <Link style={styles.legalLink} to="/terms">
+              利用規約
+            </Link>
+            、
+            <Link style={styles.legalLink} to="/legal">
+              特商法表記
+            </Link>
+            、
+            <Link style={styles.legalLink} to="/privacy">
+              プライバシーポリシー
+            </Link>
+            に同意したものとみなします。登録後30日間は無料で、その後は月額500円です。解約はいつでも可能で、返金は行っていません。
+          </p>
 
         </div>
       )}
@@ -1066,6 +1060,17 @@ const styles = {
     color: "#fffaf1",
     fontSize: 16,
     cursor: "pointer",
+  },
+  legalNote: {
+    marginTop: 10,
+    fontSize: 12,
+    color: "var(--text-muted)",
+    lineHeight: 1.6,
+  },
+  legalLink: {
+    margin: "0 4px",
+    color: "var(--text)",
+    textDecoration: "underline",
   },
   jumpButtons: {
     display: "flex",
@@ -1245,7 +1250,7 @@ const styles = {
     padding: "0 4px",
   },
   cardMobile: {
-    marginBottom: 16,
+    margin: "0 auto 16px",
     padding: 14,
     borderRadius: 14,
   },

@@ -1,66 +1,63 @@
+import { LEGAL_INFO } from "../config/legal";
+
 export default function Legal() {
   return (
     <div style={styles.page}>
       <h1 style={styles.title}>特定商取引法に基づく表記</h1>
       <p style={styles.lead}>
-        有料プランや有料機能を提供する場合、以下の情報を表示する必要があります。必要に応じて更新してください。
+        有料プランや有料機能を提供する場合、以下の情報を表示する必要があります。
       </p>
 
       <section style={styles.section}>
         <h2 style={styles.heading}>販売事業者名</h2>
-        <p style={styles.text}>（例）株式会社ゴルフスイング</p>
+        <p style={styles.text}>{LEGAL_INFO.businessName}</p>
       </section>
 
       <section style={styles.section}>
         <h2 style={styles.heading}>運営責任者</h2>
-        <p style={styles.text}>（例）山田 太郎</p>
+        <p style={styles.text}>{LEGAL_INFO.representative}</p>
       </section>
 
       <section style={styles.section}>
         <h2 style={styles.heading}>所在地</h2>
-        <p style={styles.text}>（例）〒000-0000 東京都○○区○○1-2-3</p>
+        <p style={styles.text}>{LEGAL_INFO.address}</p>
       </section>
 
       <section style={styles.section}>
         <h2 style={styles.heading}>問い合わせ先</h2>
-        <p style={styles.text}>メールアドレス: support@example.com</p>
-        <p style={styles.text}>受付時間: 平日 10:00〜18:00（日本時間）</p>
+        <p style={styles.text}>メールアドレス: {LEGAL_INFO.email}</p>
+        <p style={styles.text}>受付時間: {LEGAL_INFO.hours}</p>
       </section>
 
       <section style={styles.section}>
         <h2 style={styles.heading}>販売価格</h2>
-        <p style={styles.text}>各プランの購入ページに表示します。</p>
+        <p style={styles.text}>{LEGAL_INFO.price}</p>
       </section>
 
       <section style={styles.section}>
         <h2 style={styles.heading}>商品代金以外の必要料金</h2>
-        <p style={styles.text}>
-          インターネット接続料金等はユーザーの負担となります。
-        </p>
+        <p style={styles.text}>{LEGAL_INFO.extraFees}</p>
       </section>
 
       <section style={styles.section}>
         <h2 style={styles.heading}>支払方法</h2>
-        <p style={styles.text}>
-          クレジットカード決済等（提供する支払方法に合わせて記載）。
-        </p>
+        <p style={styles.text}>{LEGAL_INFO.paymentMethods}</p>
       </section>
 
       <section style={styles.section}>
         <h2 style={styles.heading}>支払時期</h2>
-        <p style={styles.text}>各支払方法の規定に従います。</p>
+        <p style={styles.text}>{LEGAL_INFO.paymentTiming}</p>
       </section>
 
       <section style={styles.section}>
         <h2 style={styles.heading}>提供時期</h2>
-        <p style={styles.text}>決済完了後、直ちに利用可能です。</p>
+        <p style={styles.text}>{LEGAL_INFO.deliveryTiming}</p>
       </section>
 
       <section style={styles.section}>
-        <h2 style={styles.heading}>返品・キャンセル</h2>
-        <p style={styles.text}>
-          デジタルサービスの特性上、購入後の返品・返金は原則できません。
-        </p>
+        <h2 style={styles.heading}>解約・キャンセル</h2>
+        <p style={styles.text}>{LEGAL_INFO.cancellationPolicy}</p>
+        <p style={styles.text}>{LEGAL_INFO.refundPolicy}</p>
       </section>
     </div>
   );

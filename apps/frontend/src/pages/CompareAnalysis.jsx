@@ -92,8 +92,6 @@ function CompareAnalysis({ user }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
   const [isEntitled, setIsEntitled] = useState(false);
-  const [isPaidEntitled, setIsPaidEntitled] = useState(false);
-  const [freeTrialRemaining, setFreeTrialRemaining] = useState(0);
   const [isEntitlementLoading, setIsEntitlementLoading] = useState(false);
   const [entitlementError, setEntitlementError] = useState(null);
   const [freeAccessServer, setFreeAccessServer] = useState(false);
@@ -107,8 +105,6 @@ function CompareAnalysis({ user }) {
         if (result.free_access) {
           setFreeAccessServer(true);
           setIsEntitled(true);
-          setIsPaidEntitled(true);
-          setFreeTrialRemaining(Number(result.free_trial_remaining || 0));
           setIsEntitlementLoading(false);
           setEntitlementError(null);
           return;
@@ -120,15 +116,12 @@ function CompareAnalysis({ user }) {
 
     if (FREE_ACCESS_EFFECTIVE || freeAccessServer) {
       setIsEntitled(true);
-      setIsPaidEntitled(true);
       setIsEntitlementLoading(false);
       setEntitlementError(null);
       return;
     }
     if (!user) {
       setIsEntitled(false);
-      setIsPaidEntitled(false);
-      setFreeTrialRemaining(0);
       setIsEntitlementLoading(false);
       setEntitlementError(null);
       return;
@@ -141,8 +134,6 @@ function CompareAnalysis({ user }) {
       const token = data.session?.access_token;
       if (!token) {
         setIsEntitled(false);
-        setIsPaidEntitled(false);
-        setFreeTrialRemaining(0);
         return;
       }
       const res = await fetch(`${API_BASE}/api/ai/entitlement`, {
@@ -150,20 +141,14 @@ function CompareAnalysis({ user }) {
       });
       if (!res.ok) {
         setIsEntitled(false);
-        setIsPaidEntitled(false);
-        setFreeTrialRemaining(0);
         return;
       }
       const result = await res.json();
       setIsEntitled(Boolean(result.entitled));
-      setIsPaidEntitled(Boolean(result.is_paid));
-      setFreeTrialRemaining(Number(result.free_trial_remaining || 0));
       setFreeAccessServer(Boolean(result.free_access));
     } catch (err) {
       console.error("fetchEntitlement failed", err);
       setIsEntitled(false);
-      setIsPaidEntitled(false);
-      setFreeTrialRemaining(0);
       setEntitlementError("ユーザ情報の確認に失敗しました");
     } finally {
       setIsEntitlementLoading(false);
@@ -471,10 +456,6 @@ function CompareAnalysis({ user }) {
             content: result.advice,
           },
         ]);
-        setFreeTrialRemaining(Number(result.free_trial_remaining || 0));
-        if (!FREE_ACCESS_EFFECTIVE && !freeAccessServer && !isPaidEntitled) {
-          setIsEntitled(Number(result.free_trial_remaining || 0) > 0);
-        }
       } else {
         trackEvent("ai_request_error", { mode: "compare", flow: "entitled" });
         alert("比較AIアドバイスの取得に失敗しました");
@@ -995,8 +976,6 @@ function CompareAnalysis({ user }) {
                   : isEntitled || FREE_ACCESS_EFFECTIVE || freeAccessServer
                   ? FREE_ACCESS_EFFECTIVE || freeAccessServer
                     ? "🤖 比較AIコーチに送信（無料）"
-                    : !isPaidEntitled && freeTrialRemaining > 0
-                    ? `🤖 比較AIコーチに送信（無料残り${freeTrialRemaining}回）`
                     : "🤖 比較AIコーチに送信"
                   : "🔒 比較AIの利用にはサブスク登録が必要です"}
               </button>
