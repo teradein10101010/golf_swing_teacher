@@ -6,6 +6,7 @@ import CompareAnalysis from "./pages/CompareAnalysis";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
 import Terms from "./pages/Terms";
 import Contact from "./pages/Contact";
+import Legal from "./pages/Legal";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
 import MobileTabBar from "./components/MobileTabBar";
@@ -34,18 +35,11 @@ function AppLayout() {
   const [entitlementInfo, setEntitlementInfo] = useState({
     freeAccess: false,
     isPaid: false,
-    freeTrialRemaining: 0,
   });
   const isMobile = useIsMobile();
   const location = useLocation();
   const showMobileTabBar = isMobile && ["/", "/compare"].includes(location.pathname);
   const showBetaNotice = ["/", "/compare"].includes(location.pathname) && serverFreeAccess;
-  const showFreeTrialNotice =
-    showBetaNotice &&
-    user &&
-    !entitlementInfo.freeAccess &&
-    !entitlementInfo.isPaid &&
-    entitlementInfo.freeTrialRemaining > 0;
 
   useEffect(() => {
     initAnalytics();
@@ -105,7 +99,6 @@ function AppLayout() {
           setEntitlementInfo({
             freeAccess: false,
             isPaid: false,
-            freeTrialRemaining: 0,
           });
         }
         return;
@@ -119,7 +112,6 @@ function AppLayout() {
             setEntitlementInfo({
               freeAccess: false,
               isPaid: false,
-              freeTrialRemaining: 0,
             });
           }
           return;
@@ -134,7 +126,6 @@ function AppLayout() {
         setEntitlementInfo({
           freeAccess: Boolean(result.free_access),
           isPaid: Boolean(result.is_paid),
-          freeTrialRemaining: Number(result.free_trial_remaining || 0),
         });
       } catch (err) {
         console.error("fetchEntitlement notice failed", err);
@@ -165,18 +156,10 @@ function AppLayout() {
         }}
       >
         {showBetaNotice && (
-          <>
-            <div style={{ ...styles.betaNotice, ...(isMobile ? styles.betaNoticeMobile : {}) }}>
-              <strong>ベータ版のお知らせ:</strong> 現在は検証期間のためAI解析機能を無料で提供しています。
-              正式版では有料プランを導入する予定です。
-            </div>
-            {showFreeTrialNotice && (
-              <div style={{ ...styles.trialNotice, ...(isMobile ? styles.betaNoticeMobile : {}) }}>
-                <strong>無料利用枠のお知らせ:</strong> 現在のアカウントではAI機能をあと
-                {entitlementInfo.freeTrialRemaining}回無料で利用できます。無料枠の利用後は有料プランへの登録が必要です。
-              </div>
-            )}
-          </>
+          <div style={{ ...styles.betaNotice, ...(isMobile ? styles.betaNoticeMobile : {}) }}>
+            <strong>ベータ版のお知らせ:</strong> 現在は検証期間のためAI解析機能を無料で提供しています。
+            Stripeの月額サブスクは30日間無料で確認できます。
+          </div>
         )}
         <Routes>
           <Route path="/" element={<SingleAnalysis user={user} />} />
@@ -184,6 +167,7 @@ function AppLayout() {
           <Route path="/privacy" element={<PrivacyPolicy />} />
           <Route path="/terms" element={<Terms />} />
           <Route path="/contact" element={<Contact />} />
+          <Route path="/legal" element={<Legal />} />
         </Routes>
       </main>
 
@@ -233,16 +217,5 @@ const styles = {
     fontSize: 13,
     padding: "9px 12px",
     marginBottom: 12,
-  },
-  trialNotice: {
-    marginBottom: 16,
-    padding: "10px 14px",
-    borderRadius: 12,
-    border: "1px solid rgba(120, 90, 60, 0.35)",
-    background: "rgba(255, 245, 230, 0.92)",
-    color: "var(--text)",
-    fontSize: 14,
-    lineHeight: 1.5,
-    boxShadow: "0 8px 18px var(--shadow)",
   },
 };

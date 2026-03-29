@@ -12,6 +12,16 @@ export default function Footer() {
       </div>
       <nav style={{ ...styles.nav, ...(isMobile ? styles.navMobile : {}) }}>
         <Link
+          to="/legal"
+          style={{
+            ...styles.navItem,
+            ...(isMobile ? styles.navItemMobile : {}),
+            ...(location.pathname === "/legal" ? styles.navActive : {}),
+          }}
+        >
+          特商法表記
+        </Link>
+        <Link
           to="/terms"
           style={{
             ...styles.navItem,

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from app.core.actor import actor_key_for_anonymous, actor_key_for_user, get_anonymous_id_from_request
 from app.core.auth import get_current_user_if_present, get_current_user_optional
-from app.core.config import DATA_DIR, FREE_ACCESS, VIDEOS_DIR
+from app.core.config import BACKEND_ORIGIN, DATA_DIR, FREE_ACCESS, VIDEOS_DIR
 from app.core.media_access import assert_asset_owner_any, reassign_asset_owner
 from app.core.rate_limit import enforce_rate_limit
 from app.services.swing_analyzer import (
@@ -28,7 +28,18 @@ from supabase_client import supabase
 router = APIRouter(prefix="/api")
 
 stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
 YOUR_DOMAIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173")
+WEBHOOK_URL = (
+    f"{BACKEND_ORIGIN}/api/stripe/webhook" if BACKEND_ORIGIN else "/api/stripe/webhook"
+)
+try:
+    STRIPE_SUBSCRIPTION_TRIAL_PERIOD_DAYS = max(
+        0,
+        int(os.environ.get("STRIPE_SUBSCRIPTION_TRIAL_PERIOD_DAYS", "30")),
+    )
+except ValueError:
+    STRIPE_SUBSCRIPTION_TRIAL_PERIOD_DAYS = 30
 
 analyzer = SwingAnalyzer()
 logger = logging.getLogger(__name__)
@@ -36,7 +47,6 @@ logger = logging.getLogger(__name__)
 checkout_session_cache = {}
 CHECKOUT_SESSION_TTL_SEC = 15 * 60
 ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing", "past_due"}
-FREE_TRIAL_USES = 3
 
 
 class ChatMessage(BaseModel):
@@ -70,6 +80,17 @@ class AICompareRequest(BaseModel):
     )
 
 
+def _stripe_value(obj, key: str, default=None):
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    try:
+        return obj[key]
+    except Exception:
+        return getattr(obj, key, default)
+
+
 def _is_entitled_from_db(user_id: str) -> bool:
     if FREE_ACCESS:
         return True
@@ -84,69 +105,6 @@ def _is_entitled_from_db(user_id: str) -> bool:
         return bool(res.data)
     except Exception:
         return False
-
-
-def _get_free_trial_usage_count(user_id: str) -> int:
-    try:
-        res = (
-            supabase.table("ai_free_trial_usages")
-            .select("id")
-            .eq("user_id", user_id)
-            .limit(FREE_TRIAL_USES + 1)
-            .execute()
-        )
-        return len(res.data or [])
-    except Exception:
-        logger.exception("Failed to fetch free trial usage count for user_id=%s", user_id)
-        return FREE_TRIAL_USES
-
-
-def _get_free_trial_remaining(user_id: str) -> int:
-    return max(0, FREE_TRIAL_USES - _get_free_trial_usage_count(user_id))
-
-
-def _consume_free_trial_use(user_id: str) -> int | None:
-    if FREE_ACCESS:
-        return FREE_TRIAL_USES
-
-    current_count = _get_free_trial_usage_count(user_id)
-    if current_count >= FREE_TRIAL_USES:
-        return None
-
-    inserted_id = None
-    try:
-        insert_res = (
-            supabase.table("ai_free_trial_usages")
-            .insert({"user_id": user_id, "used_at": datetime.utcnow().isoformat()})
-            .execute()
-        )
-        if insert_res.data:
-            inserted_id = insert_res.data[0].get("id")
-    except Exception:
-        logger.exception("Failed to consume free trial use for user_id=%s", user_id)
-        return None
-
-    remaining = _get_free_trial_remaining(user_id)
-    if remaining < 0:
-        remaining = 0
-
-    if _get_free_trial_usage_count(user_id) > FREE_TRIAL_USES:
-        if inserted_id is not None:
-            try:
-                (
-                    supabase.table("ai_free_trial_usages")
-                    .delete()
-                    .eq("id", inserted_id)
-                    .execute()
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to rollback extra free trial use for user_id=%s",
-                    user_id,
-                )
-        return None
-
-    return remaining
 
 
 def _grant_entitlement(user_id: str) -> None:
@@ -167,6 +125,22 @@ def _revoke_entitlement(user_id: str) -> None:
     supabase.table("ai_entitlements").delete().eq("user_id", user_id).execute()
 
 
+def _user_id_from_metadata(metadata: dict | None) -> str | None:
+    if not metadata:
+        return None
+    user_id = _stripe_value(metadata, "user_id")
+    return user_id.strip() if isinstance(user_id, str) and user_id.strip() else None
+
+
+def _apply_subscription_entitlement(user_id: str, status: str | None) -> None:
+    if not user_id:
+        return
+    if status in ACTIVE_SUBSCRIPTION_STATUSES:
+        _grant_entitlement(user_id)
+    else:
+        _revoke_entitlement(user_id)
+
+
 def _has_active_subscription(email: str | None) -> bool:
     if not email:
         return False
@@ -178,7 +152,7 @@ def _has_active_subscription(email: str | None) -> bool:
             limit=100,
         )
         for sub in subscriptions.data:
-            if sub.get("status") in ACTIVE_SUBSCRIPTION_STATUSES:
+            if _stripe_value(sub, "status") in ACTIVE_SUBSCRIPTION_STATUSES:
                 return True
     return False
 
@@ -206,16 +180,15 @@ def _get_entitlement_state(user_id: str, email: str | None = None) -> dict[str, 
             "entitled": True,
             "free_access": True,
             "is_paid": True,
-            "free_trial_remaining": FREE_TRIAL_USES,
+            "free_trial_remaining": 0,
         }
 
     is_paid = _is_entitled(user_id, email)
-    free_trial_remaining = 0 if is_paid else _get_free_trial_remaining(user_id)
     return {
-        "entitled": is_paid or free_trial_remaining > 0,
+        "entitled": is_paid,
         "free_access": False,
         "is_paid": is_paid,
-        "free_trial_remaining": free_trial_remaining,
+        "free_trial_remaining": 0,
     }
 
 
@@ -347,7 +320,11 @@ async def create_checkout_session(
             cancel_url=YOUR_DOMAIN,
             client_reference_id=user["sub"],
             customer_email=user.get("email"),
-            metadata={"video_path": video_path},
+            metadata={"video_path": video_path, "user_id": user["sub"]},
+            subscription_data={
+                "metadata": {"user_id": user["sub"]},
+                "trial_period_days": STRIPE_SUBSCRIPTION_TRIAL_PERIOD_DAYS,
+            },
             idempotency_key=idempotency_key,
         )
 
@@ -388,15 +365,15 @@ async def analyze_ai_paid(
                     status_code=403,
                     content={"error": "この決済は現在のユーザーに紐づいていません"},
                 )
-            mode = session.get("mode")
+            mode = _stripe_value(session, "mode")
             if mode == "subscription":
-                subscription_id = session.get("subscription")
+                subscription_id = _stripe_value(session, "subscription")
                 if not subscription_id:
                     return JSONResponse(
                         status_code=400, content={"error": "サブスク情報が見つかりません"}
                     )
                 subscription = stripe.Subscription.retrieve(subscription_id)
-                if subscription.get("status") not in ACTIVE_SUBSCRIPTION_STATUSES:
+                if _stripe_value(subscription, "status") not in ACTIVE_SUBSCRIPTION_STATUSES:
                     return JSONResponse(
                         status_code=403,
                         content={"error": "サブスクリプションが有効ではありません"},
@@ -480,10 +457,10 @@ def cancel_subscription(user=Depends(get_current_user_optional)):
                     limit=100,
                 )
                 for sub in subscriptions.data:
-                    sub_status = sub.get("status")
+                    sub_status = _stripe_value(sub, "status")
                     if sub_status in {"canceled", "incomplete_expired"}:
                         continue
-                    if sub.get("cancel_at_period_end"):
+                    if _stripe_value(sub, "cancel_at_period_end"):
                         cancel_at_period_end_ids.add(sub["id"])
                         continue
                     stripe.Subscription.cancel(sub["id"])
@@ -538,13 +515,7 @@ def analyze_ai_entitled(
             for msg in (req.ai_messages or [])
         ],
     )
-    free_trial_remaining = entitlement["free_trial_remaining"] if entitlement else FREE_TRIAL_USES
-    if user and entitlement and not entitlement["is_paid"]:
-        consumed_remaining = _consume_free_trial_use(user["sub"])
-        if consumed_remaining is None:
-            raise HTTPException(status_code=403, detail="Free trial exhausted")
-        free_trial_remaining = consumed_remaining
-    return {"advice": advice, "free_trial_remaining": free_trial_remaining}
+    return {"advice": advice, "free_trial_remaining": 0}
 
 
 @router.post("/analyze/ai-compare-entitled")
@@ -586,13 +557,7 @@ def analyze_ai_compare_entitled(
             for msg in (req.ai_messages or [])
         ],
     )
-    free_trial_remaining = entitlement["free_trial_remaining"] if entitlement else FREE_TRIAL_USES
-    if user and entitlement and not entitlement["is_paid"]:
-        consumed_remaining = _consume_free_trial_use(user["sub"])
-        if consumed_remaining is None:
-            raise HTTPException(status_code=403, detail="Free trial exhausted")
-        free_trial_remaining = consumed_remaining
-    return {"advice": advice, "free_trial_remaining": free_trial_remaining}
+    return {"advice": advice, "free_trial_remaining": 0}
 
 
 @router.post("/analyze/ai")
@@ -603,3 +568,75 @@ def analyze_ai(_: AIRequest):
             detail="FREE_ACCESS is enabled; use /api/analyze/ai-entitled",
         )
     raise HTTPException(status_code=403, detail="AIアドバイスは有料機能です")
+
+
+@router.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    if not STRIPE_WEBHOOK_SECRET:
+        logger.error("STRIPE_WEBHOOK_SECRET is not set")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Webhook configuration error"},
+        )
+
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+    if not sig_header:
+        return JSONResponse(status_code=400, content={"error": "Missing signature"})
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=sig_header,
+            secret=STRIPE_WEBHOOK_SECRET,
+        )
+    except ValueError:
+        return JSONResponse(status_code=400, content={"error": "Invalid payload"})
+    except stripe.error.SignatureVerificationError:
+        return JSONResponse(status_code=400, content={"error": "Invalid signature"})
+
+    event_type = _stripe_value(event, "type")
+    data_object = _stripe_value(_stripe_value(event, "data", {}), "object", {})
+
+    try:
+        if event_type == "checkout.session.completed":
+            if _stripe_value(data_object, "mode") == "subscription":
+                user_id = _stripe_value(data_object, "client_reference_id")
+                if not user_id:
+                    user_id = _user_id_from_metadata(_stripe_value(data_object, "metadata"))
+                if user_id:
+                    _grant_entitlement(user_id)
+                else:
+                    logger.warning("checkout.session.completed without user_id")
+
+        elif event_type in {
+            "customer.subscription.created",
+            "customer.subscription.updated",
+            "customer.subscription.deleted",
+        }:
+            subscription = data_object
+            user_id = _user_id_from_metadata(_stripe_value(subscription, "metadata"))
+            status = _stripe_value(subscription, "status")
+            if user_id:
+                _apply_subscription_entitlement(user_id, status)
+            else:
+                logger.warning("subscription event without user_id metadata")
+
+        elif event_type in {"invoice.payment_failed", "invoice.payment_succeeded"}:
+            # Optional: keep for audit/logging. Subscription events handle entitlement changes.
+            pass
+    except Exception:
+        logger.exception("Failed to handle Stripe webhook event %s", event_type)
+        return JSONResponse(status_code=500, content={"error": "Webhook handler failed"})
+
+    return {"received": True}
+
+
+@router.get("/stripe/webhook-url")
+def stripe_webhook_url():
+    if not BACKEND_ORIGIN:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "BACKEND_ORIGIN is not set"},
+        )
+    return {"webhook_url": WEBHOOK_URL}

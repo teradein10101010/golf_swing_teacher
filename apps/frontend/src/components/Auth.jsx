@@ -11,7 +11,6 @@ export default function Auth({ onUserChange }) {
   const [loading, setLoading] = useState(false);
   const [isEntitled, setIsEntitled] = useState(false);
   const [isPaid, setIsPaid] = useState(false);
-  const [freeTrialRemaining, setFreeTrialRemaining] = useState(0);
   const [isFreeAccess, setIsFreeAccess] = useState(false);
   const [isEntitlementLoading, setIsEntitlementLoading] = useState(false);
   const [isCanceling, setIsCanceling] = useState(false);
@@ -37,7 +36,6 @@ export default function Auth({ onUserChange }) {
     if (!user) {
       setIsEntitled(false);
       setIsPaid(false);
-      setFreeTrialRemaining(0);
       setIsFreeAccess(false);
       setIsEntitlementLoading(false);
       return;
@@ -60,7 +58,6 @@ export default function Auth({ onUserChange }) {
         if (active) {
           setIsEntitled(Boolean(result.entitled));
           setIsPaid(Boolean(result.is_paid));
-          setFreeTrialRemaining(Number(result.free_trial_remaining || 0));
           setIsFreeAccess(Boolean(result.free_access));
         }
       } catch (err) {
@@ -68,7 +65,6 @@ export default function Auth({ onUserChange }) {
         if (active) {
           setIsEntitled(false);
           setIsPaid(false);
-          setFreeTrialRemaining(0);
           setIsFreeAccess(false);
         }
       } finally {
@@ -164,9 +160,7 @@ export default function Auth({ onUserChange }) {
               : isFreeAccess
               ? "無料開放中"
               : isPaid
-              ? "課金中"
-              : freeTrialRemaining > 0
-              ? `無料残り${freeTrialRemaining}回`
+              ? "サブスク利用中"
               : "未課金"}
           </span>
         </div>
